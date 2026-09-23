@@ -18,7 +18,7 @@ import { tgShareUrl, linkFits } from './links.js';
 import { History } from './history.js';
 import { loadSettings, saveSettings, savePhoto, loadPhoto } from './store.js';
 import { shareSiteOnX, starCount } from './share.js';
-import { renderPreview } from './preview.js';
+import { renderPreview, screenWidth } from './preview.js';
 import { copyFor, isCoarse } from './copy.js';
 import { exportTxt, exportPNG, exportSVG, exportHTML, svgBlob, htmlBlob, downloadBlob, fileName } from './export.js';
 import { createCropper } from './crop.js';
@@ -57,11 +57,9 @@ const PV = {
 
 // The preview shows the AUDIENCE's screen, and most people who see a comment or a post are on a
 // phone: Android on an Android phone, iPhone everywhere else. The Windows preview is one tap away.
-// Where the author sits matters only for Telegram, whose desktop app is where Braille slants.
 function detectDevice() {
   return /Android/i.test(navigator.userAgent || '') ? 'android' : 'ios';
 }
-const AUTHOR_ON_WINDOWS = /Windows/i.test(navigator.userAgent || '');
 const DEVICE_NAME = { ios: 'iPhone', android: 'Android', windows: 'Windows' };
 
 // ------------------------------------------------------------------------------------ state
@@ -174,9 +172,9 @@ function restore(snap) {
 function resolve(ui = state.target) {
   const to = state.targetOpts;
   const id = ui === 'file' ? 'plain' : ui === 'x' && to.x === 'long' ? 'xlong' : ui;
-  // Telegram on Windows (Telegram Desktop) slants Braille; Letters in a code block are exact
-  // there, so they are the default until the person picks a style themselves
-  const want = state.mode === 'braille' && !prefs.modePicked && AUTHOR_ON_WINDOWS && (ui === 'tg' || ui === 'tgc') ? 'ascii' : state.mode;
+  // Dots stay the default everywhere (the user's call): Letters of a photo are far weaker art.
+  // On Telegram the fit line offers Letters in one tap, since Telegram Desktop slants Dots.
+  const want = state.mode;
   const mode = modeAllowed(id, want) ? want : TARGETS[id].defaultMode;
   const phone = ui === 'tg' && to.tg === 'desktop' ? 'desktop' : 390;
   const fopts = { blank: mode === 'braille' && ui !== 'file' ? state.blank : 'u2800', caption: ui === 'tgc' && to.tgc === 'caption', phone };
@@ -278,8 +276,10 @@ function drawPreviews() {
     const el = $(id);
     el.dataset.pvTheme = theme;
     // the preview is a 390 px phone at 1:1 (what fits here fits there); a narrower screen shows
-    // the same phone scaled down rather than a different wrap
-    const k = Math.min(1, (el.clientWidth || 390) / 390);
+    // the same phone scaled down rather than a different wrap. Telegram's Desktop preset is a
+    // desktop window instead, as wide as its 72-column text, scaled to fit the same way.
+    const screen = screenWidth(r.id, r.mode, r.phone);
+    const k = Math.min(1, (el.clientWidth || 390) / screen);
     let inset = 0;
     if (phoneTools) {
       const side = Math.max(bar.querySelector('.pv-left').offsetWidth, bar.querySelector('.pv-right').offsetWidth);
@@ -288,7 +288,7 @@ function drawPreviews() {
     // dark preview, art not inverted: say so on the preview itself, with the fix
     const banner = theme === 'dark' && !state.tone.invert && r.ui !== 'file'
       ? { text: 'Shows as a negative in dark mode', action: 'Invert', onAction: () => setInvert(true) } : null;
-    cur.pv = renderPreview(el, { target: r.id, payload, grid, device: state.device, theme, phone: 390, opts: r.fopts, inset, banner });
+    cur.pv = renderPreview(el, { target: r.id, payload, grid, device: state.device, theme, phone: r.phone, opts: r.fopts, inset, banner });
     el.style.setProperty('--pv-k', k < 0.999 ? k.toFixed(4) : '1');
     $('stage').style.setProperty('--pv-k', k < 0.999 ? k.toFixed(4) : '1');
   }
@@ -356,7 +356,10 @@ function updateFit() {
   } else {
     const where = r.phone === 'desktop' ? 'in the app' : 'on a phone';
     const head = `${nf(p.count)} / ${nf(p.limit)}`;
-    if (p.count > p.limit) html = `${head} · ${cols} wide · <b>${nf(p.count - p.limit)} over</b>`;
+    if (p.count > p.limit) {
+      html = `${head} · ${cols} wide · <b>${nf(p.count - p.limit)} over</b>`;
+      if (r.id === 'x') html += ' · <button type="button" class="text-btn" data-fix="premium">I have Premium</button>';
+    }
     else if (p.wraps) html = `${head} · ${cols} of ${p.maxCols} wide · <b>Wraps</b> ${where}`;
     else if (shear) {
       // Telegram: Letters are exact on Windows; elsewhere the Windows-safe blank keeps rows straight
@@ -394,6 +397,10 @@ $('fitLine').addEventListener('click', e => {
     resizedNote = null;
     if (Number.isFinite(from) && from > 0) state.cols = from;
     render(); commit('Width');
+  } else if (what === 'premium') {
+    state.targetOpts.x = 'long';
+    render(); commit('X Premium');
+    announce(`X Premium. ${$('fitLine').textContent}`);
   } else if (what === 'letters') {
     prefs.modePicked = true;
     state.mode = 'ascii'; state.cols = null;
@@ -485,7 +492,10 @@ function syncTargetChecks() {
     el.tabIndex = on || el.id === 'wFile' ? 0 : -1;
   }
   for (const el of document.querySelectorAll('#targetCards [data-v] span, #welcomeTargets [data-v] span')) {
-    el.textContent = budgetText(el.parentElement.dataset.v);
+    const v = el.parentElement.dataset.v;
+    // the welcome tile tells people with Premium that X is not stuck at 280
+    const welcomeX = v === 'x' && el.closest('#welcomeTargets') && state.targetOpts.x !== 'long';
+    el.textContent = welcomeX ? '280, or 25,000 with Premium' : budgetText(v);
   }
 }
 
@@ -964,6 +974,13 @@ function buildSize() {
     state.cols = null;
     render(); commit('Target option');
   });
+  // X Premium sits right above the preview: people with Premium should not have to find it in Size
+  segBind($('xPlanSeg'), v => {
+    if (state.targetOpts.x === v) return;
+    state.targetOpts.x = v;
+    state.cols = null;
+    render(); commit(v === 'long' ? 'X Premium' : 'X free');
+  });
   segBind($('blankSeg'), v => { state.blank = v; segSet($('blankSeg'), v); render(); commit('Blank cells'); });
 }
 
@@ -1005,6 +1022,8 @@ function syncSize() {
     $('variantSeg').innerHTML = opts.map(([v, a, b]) => `<button type="button" role="radio" data-v="${v}">${a}<small>${b}</small></button>`).join('');
   }
   if (ui in state.targetOpts) segSet($('variantSeg'), state.targetOpts[ui]);
+  $('xPlan').hidden = ui !== 'x';
+  segSet($('xPlanSeg'), state.targetOpts.x);
   $('blankBox').hidden = !(r.mode === 'braille' && ui !== 'file');
   segSet($('blankSeg'), state.blank);
 }

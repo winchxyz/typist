@@ -255,6 +255,10 @@ details.more[open] summary::before { transform: rotate(45deg); }
 
 /* stage: the preview is the hero */
 .stage { position: relative; }
+/* X: Free / Premium right above the preview (Premium allows 25,000 characters) */
+.xplan { display: flex; justify-content: center; align-items: center; height: 60px; padding: 0 16px 6px; width: 100%; }
+.xplan .seg { width: min(100%, 420px); }
+.xplan .seg > button { min-height: 44px; }
 .preview-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 2px 12px 8px; }
 .pv-left, .pv-right { display: flex; gap: 6px; align-items: center; }
 .previews { position: relative; display: flex; justify-content: center; gap: 24px; }
@@ -491,6 +495,8 @@ body.cropping .actionbar > :not(.fit), body.cropping .top-actions { display: non
     height: calc(56px * var(--pv-k, 1)); padding: 0 12px; pointer-events: none;
   }
   .preview-bar > * { pointer-events: auto; }
+  /* the X Free / Premium switch sits above the preview: the header tools move down with it */
+  .stage:has(> #xPlan:not([hidden])) .preview-bar { top: 60px; }
   .preview-bar .pill-btn { box-shadow: 0 1px 2px rgba(0, 0, 0, .06); }
   /* press and hold the art does Compare too, so its pill is an icon here */
   #btnCompare { width: 32px; padding: 0; justify-content: center; }

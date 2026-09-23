@@ -56,6 +56,17 @@ export function textWidth(target, mode, phone = 390) {
   return scale * phone - minus;
 }
 
+/**
+ * Width of the whole preview screen in CSS px: the phone, or for the desktop apps a window just
+ * wide enough for their text column (the inverse of the FIT text rule).
+ */
+export function screenWidth(target, mode, phone = 390) {
+  if (typeof phone === 'number') return phone;
+  const f = fitOf(target, mode);
+  const [scale, minus] = f.text;
+  return Math.ceil((textWidth(target, mode, phone) + minus) / scale);
+}
+
 /** Advance of each cell of one row. */
 export function cellWidths(cells, m) {
   const w = new Float64Array(cells.length);
@@ -213,6 +224,9 @@ const CSS = `
 .pv-artwrap{position:relative}
 .pv-art{position:relative;z-index:1;display:block}
 .pv-band{position:absolute;left:-2000px;right:-2000px;z-index:0;background:var(--pv-band);pointer-events:none}
+.pv-over{position:absolute;z-index:1;background:var(--pv-band);pointer-events:none}
+.pv-edge{position:absolute;top:-8px;bottom:-4px;z-index:3;width:0;border-left:1.5px dashed var(--pv-pill);pointer-events:none}
+.pv-edge span{position:absolute;top:-16px;left:5px;font:600 10.5px/14px var(--pv-font);color:var(--pv-pill);white-space:nowrap}
 .pv-rowno{position:absolute;right:calc(100% + 4px);z-index:2;height:15px;min-width:17px;padding:0 4px;border-radius:5px;
   background:var(--pv-pill);color:var(--pv-pill-text);font:700 10px/15px var(--pv-font);text-align:center;
   font-variant-numeric:tabular-nums;pointer-events:none}
@@ -419,7 +433,7 @@ function paintArt(canvas, lay, rows, mode, ink, dpr, { family = MONO, fadeFrom =
  */
 export function renderPreview(host, {
   target = 'ig', payload = null, grid = null, device = 'ios', theme = 'light', phone = 390, opts = {},
-  chip = null, media = null, dpr = null, inset = 0, banner = null,
+  chip = null, media = null, dpr = null, inset = 0, banner = null, wrapView = 'edge',
 } = {}) {
   const doc = host.ownerDocument;
   injectStyle(doc);
@@ -427,6 +441,18 @@ export function renderPreview(host, {
   let m = cellMetrics(target, mode, device);
   const maxW = textWidth(target, mode, phone);
   let lay = layoutArt(rows, mode, m, maxW);
+  // Too wide for the screen: reflowed rows turn the art into a wall of broken lines nobody can
+  // judge. By default the art stays whole, scaled into the column, with the screen's edge drawn
+  // where the rows would break and the part past it tinted ('edge'); 'wrap' shows the reflow.
+  const wrappedRows = lay.wrappedRows;
+  let edge = null;
+  if (wrappedRows.length && target !== 'plain' && wrapView !== 'wrap') {
+    const full = layoutArt(rows, mode, m, Infinity);
+    const s = Math.min(1, maxW / full.width);
+    m = { ...m, cellW: m.cellW * s, cellH: m.cellH * s, blankW: m.blankW * s };
+    lay = layoutArt(rows, mode, m, Infinity);
+    edge = { x: maxW * s, rows: wrappedRows };
+  }
   // a file has no text column: the whole art is shown, scaled into the frame (paper padding 16,
   // body padding 14 on each side)
   if (target === 'plain') {
@@ -457,20 +483,38 @@ export function renderPreview(host, {
     '--pv-edge': theme === 'dark' ? 'rgba(255,255,255,.08)' : 'rgba(0,0,0,.08)',
     '--pv-media-a': theme === 'dark' ? '#2c3e52' : '#b9cde0', '--pv-media-b': theme === 'dark' ? '#1b2836' : '#8eaac6',
   };
-  screen.style.width = phone + 'px';
+  const screenW = screenWidth(target, mode, phone);
+  screen.style.width = screenW + 'px';
   for (const k in vars) screen.style.setProperty(k, vars[k]);
 
   // ---- the art: canvas + marks, in a box exactly as wide as the text it replaces
   const art = el(doc, 'canvas', 'pv-art');
   art.setAttribute('role', 'img');
-  art.setAttribute('aria-label', ariaLabel(target, cols, nRows, { caption, wrapped: lay.wrappedRows.length, phone }));
+  art.setAttribute('aria-label', ariaLabel(target, cols, nRows, { caption, wrapped: wrappedRows.length, phone }));
   const wrap = el(doc, 'div', 'pv-artwrap');
   wrap.appendChild(art);
   const colW = Number.isFinite(maxW) ? maxW : lay.width;
   // IG and X lay text in a full-width column; bubbles and cards shrink to the art
   if (fam === 'ig' || fam === 'x') wrap.style.width = colW + 'px';
   else wrap.style.width = Math.ceil(lay.width) + 'px';
-  for (const r of lay.wrappedRows) {
+  if (edge) {
+    // the screen's edge: every row that runs past it breaks there on the real screen
+    for (const r of edge.rows) {
+      const tint = el(doc, 'div', 'pv-over');
+      tint.style.left = edge.x + 'px';
+      tint.style.top = (lay.rowLine[r] * m.cellH) + 'px';
+      tint.style.width = Math.max(0, lay.width - edge.x) + 'px';
+      tint.style.height = m.cellH + 'px';
+      tint.setAttribute('aria-hidden', 'true');
+      wrap.appendChild(tint);
+    }
+    const line = el(doc, 'div', 'pv-edge');
+    line.style.left = edge.x + 'px';
+    line.setAttribute('aria-hidden', 'true');
+    line.appendChild(el(doc, 'span')).textContent = phone === 'desktop' ? 'window edge' : 'screen edge';
+    wrap.appendChild(line);
+  }
+  for (const r of edge ? [] : lay.wrappedRows) {
     const top = lay.rowLine[r] * m.cellH, h = lay.rowSpan[r] * m.cellH;
     const band = el(doc, 'div', 'pv-band');
     // 1 px short at each end, so two wrapped rows in a row still read as two bands
@@ -627,7 +671,8 @@ export function renderPreview(host, {
     doc.fonts.load(`${m.fontPx}px "Geist Mono"`).then(f => { if (f.length && art.isConnected) paint(MONO); }).catch(() => {});
   } else paint(MONO);
 
-  return { wrappedRows: lay.wrappedRows, cellW: m.cellW, cellH: m.cellH, lines: lay.lines.length,
-           width: lay.width, height: lay.height, shear: m.shear, textWidth: maxW };
+  return { wrappedRows, cellW: m.cellW, cellH: m.cellH, lines: lay.lines.length,
+           width: lay.width, height: lay.height, shear: m.shear, textWidth: maxW, screenWidth: screenW,
+           edge: edge ? edge.x : null };
 }
 
