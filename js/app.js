@@ -81,7 +81,7 @@ const state = {
   device: detectDevice(),
   previewTheme: mq('(prefers-color-scheme: dark)').matches ? 'dark' : 'light',
 };
-const prefs = { theme: 'system', igWarned: false, modePicked: false, source: null };
+const prefs = { theme: 'system', igWarned: false, redditTip: false, modePicked: false, source: null };
 
 // toasts: short (2.4 s), gone at the next touch anywhere, below menus (css .toasts z-index)
 const toast = (message, opts = {}) => uiToast(message, { ms: opts.action ? 6000 : opts.error ? 4500 : 2400, ...opts });
@@ -131,6 +131,7 @@ if (saved && saved.prefs && typeof saved.prefs === 'object') {
   const p = saved.prefs;
   prefs.theme = pick(p.theme, ['system', 'light', 'dark'], 'system');
   prefs.igWarned = p.igWarned === true;
+  prefs.redditTip = p.redditTip === true;
   prefs.modePicked = p.modePicked === true;
   prefs.source = typeof p.source === 'string' ? p.source : null;
 }
@@ -763,9 +764,11 @@ function afterCopy(res, r, p) {
   const msg = res.hint || (res.ok ? 'Copied.' : 'Done.');
   toast(msg);
   announce(msg);
-  // Instagram's Action Blocked tip: once, as a quiet line under the fit meter (not in the toast)
-  if (res.notice && !prefs.igWarned) {
-    prefs.igWarned = true; persist();
+  // one-time tips as a quiet line under the fit meter (not in the toast): Instagram's Action
+  // Blocked, and Reddit's Code block fallback
+  const seen = r.id === 'reddit' ? 'redditTip' : 'igWarned';
+  if (res.notice && !prefs[seen]) {
+    prefs[seen] = true; persist();
     showTip(res.notice);
   }
 }

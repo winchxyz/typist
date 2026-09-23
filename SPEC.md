@@ -339,5 +339,9 @@ every row indented by 4 spaces (`TARGETS.reddit.indent`), which works on new Red
 the apps (``` does not work on old.reddit). Dots (U+2800 blanks, no U+0020 after the indent) or
 Letters (printable ASCII, the fence rules). Counts include the indents. A code block scrolls
 sideways instead of wrapping, so too-wide art warns that readers scroll. FIT.reddit: ~13 px
-monospace, Braille 0.75 em, ASCII 0.6 em, text column = screen - 48. The copy toast says to switch
-reddit.com's editor to Markdown mode; the preview is a generic comment with a grey code block.
+monospace, Braille 0.75 em, ASCII 0.6 em, text column = screen - 48. reddit.com's default rich-text
+editor ignores the indent (it keeps the spaces and sets the rows in a proportional font), so the
+payload also has `html` = `<pre><code>` of the unindented rows, written to the clipboard on every
+device: the rich-text editor reads the HTML and makes a code block, Markdown mode and the apps read
+the plain text (tests/reddit-paste.e2e.mjs pastes both ways). A one-time tip says to press Code
+block if Reddit still shows plain lines. The preview is a generic comment with a grey code block.

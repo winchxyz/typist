@@ -184,7 +184,7 @@ export function copiedHint(target, payload = {}) {
     case 'tg': case 'tgc': return TG_HINT({ ...payload, target });
     // Reddit's rich-text editor turns every line into its own paragraph: Markdown mode keeps the
     // 4-space code block that holds the art together
-    case 'reddit': return 'Copied. On reddit.com switch to Markdown mode, then paste it on its own line.';
+    case 'reddit': return 'Copied as a code block. Paste it into your post or comment.';
     default: return 'Copied as plain text.';
   }
 }
@@ -207,8 +207,12 @@ export function copyFor(target, payload, { event, device, action = 'auto' } = {}
   if ((target === 'tg' || target === 'tgc') && action === 'share') {
     return shareTelegram(payload, { device: { coarse }, event }).then(withText);
   }
-  const html = (target === 'tg' || target === 'tgc') && payload.html && !coarse ? payload.html : null;
-  const repeat = target === 'ig' && (payload.warnings || []).find(w => w.code === 'ig-repeat');
+  // Telegram: HTML only for the desktop app. Reddit: always, since its editors on every device
+  // either read the HTML code block (rich text) or the indented plain text (Markdown)
+  const html = target === 'reddit' ? payload.html || null
+    : (target === 'tg' || target === 'tgc') && payload.html && !coarse ? payload.html : null;
+  const repeat = target === 'ig' ? (payload.warnings || []).find(w => w.code === 'ig-repeat')
+    : target === 'reddit' ? (payload.warnings || []).find(w => w.code === 'reddit-markdown') : null;
   return copyText(text, html).then(c => withText({
     ...c, hint: c.ok ? copiedHint(target, payload) : MANUAL_HINT,
     notice: c.ok && repeat ? repeat.message : null,

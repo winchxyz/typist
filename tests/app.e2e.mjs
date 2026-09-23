@@ -27,14 +27,14 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'typist-e2e-'));
 // Records what the page hands to the clipboard, whatever the path.
 const SPY = () => {
   window.__clip = [];
-  const push = (via, text) => window.__clip.push({ via, text });
+  const push = (via, text, html = false) => window.__clip.push({ via, text, html });
   const c = navigator.clipboard;
   if (c) {
     if (c.write) {
       const w = c.write.bind(c);
       c.write = items => {
         try {
-          for (const it of items) if (it.types.includes('text/plain')) it.getType('text/plain').then(b => b.text()).then(t => push('item', t));
+          for (const it of items) if (it.types.includes('text/plain')) it.getType('text/plain').then(b => b.text()).then(t => push('item', t, it.types.includes('text/html')));
         } catch { /* odd item */ }
         return w(items);
       };
@@ -223,17 +223,25 @@ async function run(browserName) {
   check('telegram letters: payload is a ``` fence', await TY(() => TY.payload.text.startsWith('```\n') && TY.payload.text.endsWith('\n```')));
   await copyCase('Channel', target('tgc'), undefined, { toast: /channel/ });
   // Reddit: the art only survives in a Markdown code block, every row indented by 4 spaces
-  await copyCase('Reddit (letters, code block)', target('reddit'), undefined, { toast: /Markdown mode/ });
+  await copyCase('Reddit (letters, code block)', target('reddit'), undefined, { toast: /code block/ });
   s = await TY(() => ({ mode: TY.payload.mode, lines: TY.payload.text.split('\n') }));
   check('reddit letters: every row is a 4-space code block line of printable ASCII',
     s.mode === 'ascii' && s.lines.every(l => /^ {4}[\x20-\x5f\x61-\x7e]*$/.test(l)), s.lines[0]);
   await copyCase('Reddit (dots, code block)', async () => {
     await page.click('#tab-look');
     await page.click('#styleSeg [data-v="braille"]');
-  }, undefined, { toast: /Markdown mode/ });
+  }, undefined, { toast: /code block/ });
   s = await TY(() => ({ mode: TY.payload.mode, lines: TY.payload.text.split('\n') }));
   check('reddit dots: 4-space indent, then Braille only',
     s.mode === 'braille' && s.lines.every(l => /^ {4}[\u2800-\u28ff]+$/.test(l)), s.lines[0]);
+  // the rich-text editor on reddit.com reads text/html: a <pre><code> block of the same rows
+  const clipR = await lastClip();
+  check('reddit: the clipboard also carries an HTML code block', !!(clipR && clipR.html), clipR && clipR.via);
+  check('reddit: the HTML is <pre><code> with the rows, no indent', await TY(() => {
+    const h = TY.payload.html || '';
+    const rows = TY.payload.text.split('\n').map(l => l.slice(4)).join('\n');
+    return h.startsWith('<pre><code>') && h.endsWith('</code></pre>') && h.includes(rows.split('\n')[0]) && !/<pre><code> {4}/.test(h);
+  }));
   await copyCase('X (Copy)', target('x'), '#actionBar .sec-btn', { toast: /new post/ });
   await copyCase('X long', async () => { await page.click('#tab-size'); await page.click('#variantSeg [data-v="long"]'); }, undefined, { toast: /Premium/ });
   await page.click('#variantSeg [data-v="post"]');

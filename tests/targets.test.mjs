@@ -192,7 +192,15 @@ test('Reddit: Letters are printable ASCII after the indent, backticks never surv
   const res = formatFor('reddit', g);
   assert.equal(res.text, "    ' /_\\ \n     (o o)");
   assert.equal(res.count, countFor('reddit', 'ascii', 6, 2));
-  assert.equal(res.html, null);
+});
+
+test('Reddit: the HTML twin is a <pre><code> block of the same rows without the indent, escaped', () => {
+  const g = grid('ascii', 5, 2, (x, y) => cps(y ? '<o&o>' : ' /_\\ ')[x]);
+  const res = formatFor('reddit', g);
+  assert.equal(res.html, '<pre><code> /_\\ \n&lt;o&amp;o&gt;</code></pre>');
+  const d = formatFor('reddit', grid('braille', 3, 2, (x) => (x === 1 ? 0x28ff : B)));
+  assert.equal(d.html, '<pre><code>⠀⣿⠀\n⠀⣿⠀</code></pre>');
+  assert.equal(formatFor('ig', grid('braille', 3, 2, () => B)).html, null, 'chats that read plain text get no HTML');
 });
 
 test('Reddit: blocks warn, too-wide art says readers scroll sideways, autoFit fits a phone', () => {

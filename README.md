@@ -51,7 +51,7 @@ photo never leaves your device.
   Android, Windows), light and dark. Rows that would wrap are marked where they break.
 - **One button per place:** Copy for Instagram; Post on X (opens the X composer with the art filled
   in and puts it on your clipboard too); Copy for X for a Premium long post; Copy for Telegram or
-  for the channel; Copy for Reddit (a Markdown code block). On Telegram, Share opens the share sheet
+  for the channel; Copy for Reddit (a code block, for the rich-text editor and for Markdown mode). On Telegram, Share opens the share sheet
   on a phone, and on desktop Open hands short art to Telegram through a t.me link.
 - **A PNG button on every target** (2× or 4×; on a phone it goes through the share sheet, so it can
   land in Photos). The File target adds SVG, HTML (colour blocks keep their colours) and .txt.
@@ -81,7 +81,7 @@ text colour of the app it lands in.
 | X long post (Premium) | 25,000 | Weighted, same rules | Dots | The timeline shows about the first 280, then Show more. Typist marks that fold (27 × 15 shows 5 rows). |
 | Telegram message | 4,096 | UTF-16 code units | Dots, or Letters in a code block | 24 × 14 Dots on a phone. Letters only line up inside a code block: 32 wide on a phone, 72 on desktop. |
 | Telegram channel | 4,096, photo caption 1,024 | UTF-16 code units | Dots, or Letters in a code block | 27 × 16 Dots (447 characters) fit a text post and a photo caption. |
-| Reddit post or comment | 10,000 in a comment, 40,000 in a post | UTF-16 code units, the indents included | Dots, or Letters, both in a code block | Reddit joins single lines into one paragraph, so every row is indented 4 spaces: a Markdown code block, which keeps the line breaks on new Reddit, old.reddit and the apps. On reddit.com switch the editor to Markdown mode before pasting. 35 × 19 Dots or 43 × 19 Letters fit a 390 px phone; wider art scrolls sideways. |
+| Reddit post or comment | 10,000 in a comment, 40,000 in a post | UTF-16 code units, the indents included | Dots, or Letters, both in a code block | Reddit joins single lines into one paragraph, so the art goes in as a code block. The clipboard carries it twice: indented 4 spaces (a Markdown code block, for Markdown mode, old.reddit and the apps) and as HTML `<pre><code>`, which reddit.com's rich-text editor turns into a code block. 35 × 19 Dots or 43 × 19 Letters fit a 390 px phone; wider art scrolls sideways. |
 | File | none | | Dots, Letters, Blocks | PNG, SVG, HTML, .txt |
 
 **Why the blanks are U+2800.** Instagram and X set text in proportional fonts, where a space and a

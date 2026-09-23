@@ -218,7 +218,11 @@ export function formatFor(id, grid, opts = {}) {
   const pad = ' '.repeat(t.indent || 0);
   const body = (pad ? lines.map(l => pad + l) : lines).join('\n');
   const text = (fenced ? '```\n' + body + '\n```' : body).normalize('NFC');
-  const html = fenced ? '<pre>' + escapeHtml(body) + '</pre>' : null;
+  // Reddit's rich-text editor ignores the Markdown indent (it keeps the spaces and sets the rows in
+  // a proportional font) but turns pasted HTML <pre><code> into a code block: the clipboard carries
+  // both, the plain text for Markdown mode and the apps, the HTML for the rich-text editor.
+  const html = fenced ? '<pre>' + escapeHtml(body) + '</pre>'
+    : codeBlock ? '<pre><code>' + escapeHtml(lines.join('\n')) + '</code></pre>' : null;
 
   const limit = limitFor(id, opts);
   const count = t.counter === 'x' ? xWeightedLength(text) : utf16Length(text);
@@ -264,7 +268,7 @@ export function formatFor(id, grid, opts = {}) {
   }
   if (codeBlock) {
     warnings.push({ code: 'reddit-markdown', level: 'info',
-      message: 'On reddit.com switch the editor to Markdown mode, then paste the art on its own line.' });
+      message: 'If Reddit shows the art as plain lines, select it and press Code block (or paste it again in Markdown mode).' });
   }
   if (id === 'ig') {
     if (rows > 12) warnings.push({ code: 'ig-more', level: 'info', message: 'Long comments can fold behind “more”.' });
