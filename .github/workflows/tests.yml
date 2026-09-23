@@ -1,0 +1,37 @@
+name: Tests
+
+# The unit and fuzz tests: pure modules, plain node, no browser and no server needed.
+# The Playwright end-to-end tests (tests/*.e2e.mjs) need the dev server and local browsers,
+# so they run on a desktop, not here.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Converter
+        run: node tests/convert.test.mjs
+      - name: Fuzz
+        run: node tests/fuzz.test.mjs
+      - name: Targets
+        run: node tests/targets.test.mjs
+      - name: Counting and links
+        run: node tests/count.test.mjs
+      - name: Exports
+        run: node tests/export.test.mjs
+      - name: Previews
+        run: node tests/preview.test.mjs
+      - name: ASCII matcher
+        run: node --test tests/ascii.test.mjs

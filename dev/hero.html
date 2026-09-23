@@ -5,9 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Typist: welcome hero options</title>
 <!-- Welcome hero line-up (dev only). The welcome screen as the app draws it (index.html markup,
-     css/app.css), with one of four hero options in #welcomeArt:
-       ?opt=A|B|C|D  ;theme=light|dark  ;w=..;h=.. (informational)  ;sheet=1 (look contact sheet)
-     Shots: node dev/hero-shot.mjs [--opts A,B] [--variants desk-dark,phone-light,phone-dark] -->
+     css/app.css), with one of five hero options in #welcomeArt:
+       ?opt=A|B|C|D|E  ;theme=light|dark  ;w=..;h=.. (informational)  ;sheet=1 (look contact sheet)
+     Shots: node dev/hero-shot.mjs [--opts A,B] [--variants desk-dark,phone-light,phone-dark]
+     Line-up: node dev/hero-shot.mjs --lineup   (shots/hero_lineup.png from the hero_* shots) -->
 <link rel="icon" href="../icon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -21,9 +22,18 @@
   .hero-frame canvas { display: block; }
   .hero-split { border-radius: 14px; overflow: hidden; box-shadow: 0 0 0 1px var(--border), var(--shadow-paper); background: var(--surface); }
   .hero-chat { transform-origin: 50% 50%; }
+  body.welcoming .welcome-art.hero-d { place-items: start center; overflow: hidden; padding-bottom: 0; }
+  .hero-d .pv-head { display: none; }
   .hero-cap { position: absolute; left: 12px; bottom: 10px; font: 500 11.5px/1 var(--sans); letter-spacing: .02em;
     padding: 5px 8px; border-radius: 999px; background: rgba(20, 20, 22, .62); color: #fff; -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
   .hero-cap.r { left: auto; right: 12px; background: var(--text); color: var(--surface); }
+  /* E: a near-black card in both themes; the canvas paints the ground, the glow and the dots */
+  .hero-night { border-radius: 16px; overflow: hidden; background: #0b0a09;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, .28), var(--shadow-paper); }
+  .hero-night canvas { position: absolute; inset: 0; }
+  :root[data-theme="dark"] .hero-night { box-shadow: 0 0 0 1px rgba(255, 255, 255, .07), var(--shadow-paper); }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .hero-night { box-shadow: 0 0 0 1px rgba(255, 255, 255, .07), var(--shadow-paper); } }
+  @media (max-width: 699px) { body.welcoming .welcome-art.hero-e { padding: 8px 16px; } }
 
   /* wide screens (the user's 785 px pane and up): hero and card side by side, so the art gets
      the whole height instead of the ~170 px strip left above a full-width sheet */

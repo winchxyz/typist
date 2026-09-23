@@ -5,6 +5,9 @@ import { createConverter, gridLines, DITHERS, smallGridBoost } from '../js/conve
 import { encodeBraille, brailleDots, ditherDots } from '../js/dither.js';
 import { QUAD_CP, BLOCK_SET, blocksQuad, labGrid } from '../js/blocks.js';
 import { sampleFromRGBA, decodeSource, toneGrid, TONE_DEFAULTS, LOOKS } from '../js/tone.js';
+// Timing budgets are for this machine; shared CI runners (CI=true) are slower, so they get slack
+// there: the tests still catch a real slowdown without failing on a busy runner.
+const PERF = process.env.CI ? 4 : 1;
 
 let pass = 0, fail = 0;
 const results = [];
@@ -342,7 +345,7 @@ test('looks: every look under 5 ms for a 120 x 88 grid (node, median)', () => {
     xs.sort((a, b) => a - b);
     lookMs[id] = xs[xs.length >> 1];
   }
-  const slow = Object.entries(lookMs).filter(([, v]) => v >= 5);
+  const slow = Object.entries(lookMs).filter(([, v]) => v >= 5 * PERF);
   assert.deepEqual(slow, []);
 });
 
@@ -363,8 +366,8 @@ test('timing: 60 x 40 Braille from a fresh crop < 30 ms, tone change < 10 ms', (
   const med = a => a.slice().sort((x, y) => x - y)[a.length >> 1];
   timing.fresh = med(fresh); timing.tone = med(toneT); timing.dither = med(dith);
   timing.freshMax = Math.max(...fresh); timing.toneMax = Math.max(...toneT);
-  assert.ok(timing.fresh < 30, 'fresh ' + timing.fresh);
-  assert.ok(timing.tone < 10, 'tone ' + timing.tone);
+  assert.ok(timing.fresh < 30 * PERF, 'fresh ' + timing.fresh);
+  assert.ok(timing.tone < 10 * PERF, 'tone ' + timing.tone);
 });
 
 test('ASCII wiring (when ascii.js is present)', () => {

@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Typist intro film</title>
+<!-- The 16 s intro film (dev only), 1920 x 1080. Every frame is a pure function of time:
+     window.renderAt(t) draws the frame for t seconds (no CSS transitions, no clocks, no randomness),
+     so tests/intro-render.mjs can step it frame by frame and encode docs/typist-intro.mp4.
+       ?t=4.2   show one frame (for looking at it in a browser)
+     All art is real Typist output: js/convert.js on img/showcase/halo.jpg, js/preview.js screens. -->
+<link rel="icon" href="../icon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&display=swap">
+<style>
+  :root {
+    --ground: #0b0a09;
+    --paper: #f1ece2;
+    --muted: #8e887d;
+    --faint: #5d5850;
+    --gold: #e7c552;
+    --serif: 'Instrument Serif', Georgia, serif;
+    --sans: 'Geist', system-ui, sans-serif;
+    --mono: 'Geist Mono', ui-monospace, monospace;
+  }
+  html, body { margin: 0; background: var(--ground); overflow: hidden; }
+  #stage { position: relative; width: 1920px; height: 1080px; overflow: hidden; background: var(--ground);
+    -webkit-font-smoothing: antialiased; color: var(--paper); font-family: var(--sans); }
+  #stage > canvas { position: absolute; left: 0; top: 0; }
+  .abs { position: absolute; left: 0; top: 0; will-change: transform, opacity; }
+  .serif { font-family: var(--serif); font-weight: 400; }
+  em { font-style: italic; }
+  .gold { color: var(--gold); }
+
+  /* poster / end card */
+  .wordmark { font: italic 400 212px/1 var(--serif); letter-spacing: -0.01em; white-space: nowrap; }
+  .tagline { font: 400 70px/1.05 var(--serif); white-space: nowrap; }
+  .tagline em { color: var(--gold); }
+  .sub { font: 400 25px/1.45 var(--sans); color: var(--muted); letter-spacing: 0.005em; white-space: nowrap; }
+  .meta { font: 500 15px/1 var(--sans); color: var(--faint); letter-spacing: 0.22em; text-transform: uppercase; white-space: nowrap; }
+  .url { font: 400 30px/1 var(--sans); color: var(--paper); letter-spacing: 0.01em; white-space: nowrap; }
+  .by { font: 400 22px/1 var(--sans); color: #aaa498; white-space: nowrap; }  /* sits over the dimmed art */
+
+  /* the typing caption */
+  .cap1 { font: 400 76px/1 var(--serif); white-space: nowrap; }
+  .cap2 { font: italic 400 76px/1 var(--serif); color: var(--gold); white-space: nowrap; }
+  .counter { font: 400 22px/1 var(--mono); color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .counter b { font-weight: 500; color: var(--paper); }
+  .rowtext { font: 400 26px/1 'Segoe UI Symbol', 'Noto Sans Symbols 2', sans-serif; color: var(--faint); white-space: pre; }
+
+  /* the phones */
+  .heading { font: 400 58px/1 var(--serif); white-space: nowrap; }
+  .heading em { color: var(--gold); }
+  .phone { position: absolute; left: 0; top: 0; width: 390px; height: 500px; zoom: 1.34; border-radius: 22px; }
+  .phone .pv { height: 100%; display: flex; flex-direction: column;
+    box-shadow: 0 0 0 1px rgba(255,255,255,.09), 0 40px 80px -30px rgba(0,0,0,.9); }
+  .phone .pv > * { flex-shrink: 0; }
+  .phone .pv-igcompose { margin-top: auto; }
+  .phone .pv-tg .pv-body { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; }
+  .phone .pv-x .pv-xpost { border-bottom: 1px solid var(--pv-line); }
+  .plabel { text-align: center; white-space: nowrap; }
+  .plabel b { display: block; font: 500 25px/1 var(--sans); color: var(--paper); }
+  .plabel span { display: block; margin-top: 12px; font: 400 21px/1 var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+  .plabel span i { font-style: normal; color: #6fd394; }
+
+  /* the looks */
+  .looks-h { font: 400 76px/1 var(--serif); white-space: nowrap; }
+  .looks-h em { color: var(--gold); }
+  .look { font: 500 27px/1 var(--sans); white-space: nowrap; display: flex; align-items: center; gap: 18px; }
+  .look i { display: block; width: 10px; height: 10px; border-radius: 50%; background: var(--gold); }
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<script type="module" src="intro.js"></script>
+</body>
+</html>

@@ -9,6 +9,9 @@ import { encodeBraille, ditherDots, DITHERS } from '../js/dither.js';
 import { QUAD_CP } from '../js/blocks.js';
 import { sampleFromRGBA, toneGrid, TONE_DEFAULTS, LOOKS } from '../js/tone.js';
 import { asciiCells, ASCII_CHARSET, ASCII_SUB } from '../js/ascii.js';
+// Timing budgets are for this machine; shared CI runners (CI=true) are slower, so they get slack
+// there: the tests still catch a real slowdown without failing on a busy runner.
+const PERF = process.env.CI ? 4 : 1;
 
 let pass = 0, fail = 0, skip = 0;
 const out = [];
@@ -195,7 +198,7 @@ test('extremes: 1 x 1 grid and 200-column grid in every mode, valid and NaN-free
     const g = c.run({}, { ...m, cols: 200, rows: 110 });
     const ms = performance.now() - t0;
     assertGridSane(g, m.mode, 200, 110);
-    assert.ok(ms < 2000, `${JSON.stringify(m)} 200 cols took ${ms.toFixed(0)} ms`);
+    assert.ok(ms < 2000 * PERF, `${JSON.stringify(m)} 200 cols took ${ms.toFixed(0)} ms`);
   }
 });
 
