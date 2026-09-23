@@ -7,7 +7,7 @@ import { performance } from 'node:perf_hooks';
 import { createConverter, gridLines } from '../js/convert.js';
 import { encodeBraille, ditherDots, DITHERS } from '../js/dither.js';
 import { QUAD_CP } from '../js/blocks.js';
-import { sampleFromRGBA, toneGrid, TONE_DEFAULTS } from '../js/tone.js';
+import { sampleFromRGBA, toneGrid, TONE_DEFAULTS, LOOKS } from '../js/tone.js';
 import { asciiCells, ASCII_CHARSET, ASCII_SUB } from '../js/ascii.js';
 
 let pass = 0, fail = 0, skip = 0;
@@ -281,9 +281,10 @@ test('hostile grid sizes (cols NaN / 0 / -3 / 2.6 / "12") are clamped, never NaN
 });
 
 test('invert symmetry: manual tone + threshold gives the exact dot complement (Braille and mono blocks)', () => {
+  // an algebraic property of the soft look (plain curves); photo / poster clean backdrops per theme
   const src = noise(97, 89, 11);
   const c = conv(src);
-  const tone = { auto: false, detail: 0, contrast: 0, brightness: 0, gamma: 1 };
+  const tone = { look: 'soft', auto: false, detail: 0, contrast: 0, brightness: 0, gamma: 1 };
   const s = sampleFromRGBA(src.data, 97, 89, 60, 68, { crop: {} });
   const onHalf = Array.from(s.L).some(v => v === 0.5);
   const a = c.run({}, { mode: 'braille', cols: 30, rows: 17, dither: 'threshold', tone });
@@ -311,14 +312,23 @@ test('invert: a symmetric grey ramp reaches the same coverage in both themes (mi
   // not asserted: dark mode uses v^g on the light side, not the mirror curve 1 - (1 - v)^g (design)
 });
 
-test('OPEN: brightness still moves dark mode on a bright photo (auto gamma must not sit on its bound)', () => {
-  // light photo inverted = mostly ink; solveGamma pins at its bound 4, the ink target is missed and
-  // brightness 0 and +0.6 give the same picture (also on the baked pet and logo samples and dark.jpg)
+test('brightness moves dark mode on a bright photo too, every look (auto gamma on its bound must not swallow it)', () => {
+  // light photo inverted = mostly lit dots; the auto solve pins at its bound. Brightness is a lighter
+  // photo in both themes: fewer dots on paper, MORE lit dots in dark mode (dots are the light parts)
   const c = conv(portrait());
   const base = { mode: 'braille', cols: 40, rows: 22 };
-  const res = [-0.6, 0, 0.6].map(b => c.run({}, { ...base, tone: { invert: true, brightness: b } }));
-  const [dk, mid, lt] = res.map(g => g.ink);
-  assert.ok(lt < mid - 0.03 && dk > mid + 0.03, `dark-mode ink at brightness -0.6 / 0 / +0.6: ${dk.toFixed(3)} / ${mid.toFixed(3)} / ${lt.toFixed(3)}, gamma ${res.map(g => g.tone.gamma.toFixed(2)).join(' / ')}`);
+  const problems = [];
+  for (const { id } of LOOKS) {
+    for (const invert of [false, true]) {
+      const res = [-0.6, 0, 0.6].map(b => c.run({}, { ...base, tone: { look: id, invert, brightness: b } }));
+      const [dk, mid, lt] = res.map(g => g.ink);
+      // monotone with a real spread (sketch on a hard-edged face is all lines at 0: + has little to
+      // lighten, so each side alone is not required to move 0.03)
+      const ok = invert ? lt >= mid && mid >= dk && lt - dk > 0.06 : lt <= mid && mid <= dk && dk - lt > 0.06;
+      if (!ok) problems.push(`${id} ${invert ? 'dark' : 'light'}: ink at brightness -0.6 / 0 / +0.6 = ${dk.toFixed(3)} / ${mid.toFixed(3)} / ${lt.toFixed(3)}`);
+    }
+  }
+  assert.deepEqual(problems, []);
 });
 
 test('ASCII ramp: hostile ramps never leak non-charset glyphs (backtick-only, empty, control, non-ASCII)', () => {

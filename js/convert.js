@@ -2,11 +2,11 @@
 // affects: the sample depends on crop + grid size + colour, the tone on the sample + tone controls,
 // and the encode (dither / glyph match / block fit) runs on top of the cached tone.
 
-import { sampleImage, decodeSource, toneGrid, TONE_DEFAULTS, CROP_DEFAULTS } from './tone.js';
+import { sampleImage, decodeSource, toneGrid, normalizeTone, TONE_DEFAULTS, CROP_DEFAULTS, LOOKS } from './tone.js';
 import { ditherDots, encodeBraille, DITHERS } from './dither.js';
 import { labGrid, blocksHalf, blocksQuad, blocksMono } from './blocks.js';
 
-export { DITHERS, TONE_DEFAULTS, CROP_DEFAULTS };
+export { DITHERS, TONE_DEFAULTS, CROP_DEFAULTS, LOOKS };
 
 // ascii.js is written in parallel and may be missing or broken while the app is built; Braille and
 // blocks must keep working without it. Loaded once at module start, so run() stays synchronous.
@@ -94,7 +94,7 @@ export function createConverter() {
     const num = (v, d) => (Number.isFinite(+v) ? +v : d);
     o.cols = Math.max(1, Math.round(num(o.cols, OPTS_DEFAULTS.cols)));
     o.rows = Math.max(1, Math.round(num(o.rows, 0) || o.cols * (ASPECT[o.mode] || 0.5)));
-    const tone = { ...TONE_DEFAULTS, ...o.tone };
+    const tone = normalizeTone(o.tone);   // defaults, clamped sliders, a valid look
     const colorBlocks = o.mode === 'blocks' && !!o.color;
     const [W, H] = sampleSize(o);
 
@@ -109,14 +109,17 @@ export function createConverter() {
     const kind = o.mode === 'blocks' ? (colorBlocks ? 'color' : 'mono') : o.mode;
     const target = INK_TARGET[kind];
     const boost = kind === 'braille' || kind === 'mono' ? smallGridBoost(o.cols) : 0;
-    const tKey = `${sKey}|${tone.auto ? 1 : 0},${tone.brightness},${tone.contrast},${tone.gamma},` +
+    // colour blocks keep the soft look: their L sets the colours' lightness, and a look that pushes
+    // tones to the extremes would posterise the colours
+    const look = kind === 'color' ? 'soft' : tone.look;
+    const tKey = `${sKey}|${look}|${tone.auto ? 1 : 0},${tone.brightness},${tone.contrast},${tone.gamma},` +
       `${tone.detail},${tone.edges},${tone.invert ? 1 : 0}|${target}|${boost}`;
     let L = tones.get(tKey);
     if (!L) {
       // colour blocks should look like the photo: half-strength levels, little sharpening (halos
       // show in colour), no ink target
       L = kind === 'color'
-        ? toneGrid(img, { ...tone, detail: tone.detail * 0.25 }, { target, boost, stretch: 0.5 })
+        ? toneGrid(img, { ...tone, look, detail: tone.detail * 0.25 }, { target, boost, stretch: 0.5 })
         : toneGrid(img, tone, { target, boost });
       tones.set(tKey, L);
       stats.tones++;

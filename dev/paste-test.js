@@ -556,7 +556,7 @@ function kitRuntime(data) {
       el('li', { text: 'Tap Copy on a card.' }),
       el('li', { text: 'Paste it into the app named in that section and look closely.' }),
       el('li', { text: 'Tap Works or Broken, add a short note.' }),
-      el('li', { text: 'At the bottom, tap Copy my results and paste them into the chat with Claude.' }),
+      el('li', { text: 'Your answers save for Claude as you go (see Results at the bottom). If it says they could not be saved, tap Copy my results and paste them into the chat.' }),
     ]),
     el('p', { class: 'meta', text: 'Kit v' + data.version + ' · built ' + data.built.slice(0, 16).replace('T', ' ') + ' UTC · ' + data.cards.length + ' tests' }),
     fallbackMods.length ? el('p', { class: 'banner', text: 'Built with stand-in code for: ' + fallbackMods.join(', ') + '. Payloads may differ from the app.' }) : null,
@@ -638,12 +638,57 @@ function kitRuntime(data) {
   }
   function setStatus(id, s) {
     var r = store.results[id] || (store.results[id] = {});
-    r.s = s; tidy(id); save(); paintCard(id); progress();
+    r.s = s; tidy(id); save(); paintCard(id); progress(); sync();
   }
   function setNote(id, n) {
     var r = store.results[id] || (store.results[id] = {});
-    r.n = n; tidy(id); save(); progress();
+    r.n = n; tidy(id); save(); progress(); sync();
   }
+
+  // ---- shared results (published as a claude.ai artifact with the db capability) ---------------
+  // Each device writes one document, results/<device id>, so Claude can read every phone's
+  // answers. Outside claude.ai there is no window.claude: the kit works the same, minus the sync.
+  var syncState = { db: null, pending: false, busy: false, timer: 0, status: 'Checking whether answers can be saved for Claude…' };
+  if (!store.deviceId) { store.deviceId = 'd' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8); save(); }
+  function syncMsg(text, cls) {
+    syncState.status = text;
+    if (syncLine) { syncLine.textContent = text; syncLine.className = 'msg' + (cls ? ' ' + cls : ''); }
+  }
+  function sync() {
+    if (!syncState.db) return;
+    syncState.pending = true;
+    clearTimeout(syncState.timer);
+    syncState.timer = setTimeout(flush, 1200);
+  }
+  function flush() {
+    if (!syncState.db || !syncState.pending) return;
+    if (syncState.busy) { syncState.timer = setTimeout(flush, 800); return; }
+    syncState.pending = false; syncState.busy = true;
+    var d = device();
+    var body = { kit: data.version, built: data.built, device: store.device || '', ua: d.ua, screen: d.screen,
+      dpr: d.dpr, scheme: d.scheme, pointer: d.pointer, results: store.results, updated: new Date().toISOString() };
+    syncState.db.doc('results/' + store.deviceId).set(body).then(function () {
+      syncState.busy = false;
+      var n = Object.keys(store.results).length;
+      syncMsg('Saved for Claude ✓ ' + n + ' answer' + (n === 1 ? '' : 's') + ' from this device.', 'ok');
+    }, function (e) {
+      syncState.busy = false;
+      syncMsg('Could not save for Claude (' + (e && e.code || 'error') + '). Use Copy my results instead.', 'bad');
+    });
+  }
+  try {
+    if (window.claude && typeof window.claude.use === 'function') {
+      window.claude.use('db').then(function (db) {
+        if (!db) { syncMsg('Answers are kept on this device only. Tap Copy my results when you are done.'); return; }
+        syncState.db = db;
+        syncMsg('Connected: answers save for Claude as you go.', 'ok');
+        if (Object.keys(store.results).length || store.device) sync();
+      }, function () { syncMsg('Answers are kept on this device only. Tap Copy my results when you are done.'); });
+    } else {
+      syncState.status = 'Answers are kept on this device only. Tap Copy my results when you are done.';
+    }
+  } catch (e) { syncState.status = 'Answers are kept on this device only.'; }
+  var syncLine = null;
   function tidy(id) { var r = store.results[id]; if (r && !r.s && !r.n) delete store.results[id]; }
   function progress() {
     Object.keys(secUi).forEach(function (k) {
@@ -687,10 +732,24 @@ function kitRuntime(data) {
   }
   var d0 = device();
   var devInput = el('input', { id: 'dev', type: 'text', value: store.device || '', placeholder: 'e.g. iPhone 15, iOS 19, IG + X + Telegram apps', autocomplete: 'off' });
-  devInput.addEventListener('input', function () { store.device = devInput.value; save(); progress(); });
+  devInput.addEventListener('input', function () { store.device = devInput.value; save(); progress(); sync(); });
   var resUi = { msg: el('p', { class: 'msg', 'aria-live': 'polite' }), manual: el('textarea', { class: 'manual', readonly: '' }) };
   resUi.manual.hidden = true;
+  syncLine = el('p', { class: 'msg', id: 'sync-status', 'aria-live': 'polite', text: syncState.status });
   var out = el('pre', { class: 'out', id: 'results-text' });
+  // two taps instead of confirm(): confirm() is blocked inside the claude.ai viewer
+  var clearArmed = false, clearTimer = 0;
+  var clearBtn = el('button', { class: 'btn', type: 'button', id: 'clear-results', text: 'Clear', onclick: function () {
+    if (!clearArmed) {
+      clearArmed = true; clearBtn.textContent = 'Tap again to clear everything';
+      clearTimer = setTimeout(function () { clearArmed = false; clearBtn.textContent = 'Clear'; }, 4000);
+      return;
+    }
+    clearTimeout(clearTimer); clearArmed = false; clearBtn.textContent = 'Clear';
+    store = { results: {}, deviceId: store.deviceId }; save();
+    Object.keys(cardUi).forEach(function (id) { cardUi[id].note.value = ''; paintCard(id); });
+    devInput.value = ''; progress(); sync();
+  } });
   app.appendChild(el('section', { class: 'sec results', id: 's-results' }, [
     el('div', { class: 'sec-head' }, [el('h2', { text: 'Results' })]),
     el('dl', null, [
@@ -702,14 +761,9 @@ function kitRuntime(data) {
     el('div', { class: 'field' }, [el('label', { for: 'dev', text: 'Phone and apps you tested with' }), devInput]),
     el('div', { class: 'actions' }, [
       el('button', { class: 'btn primary', type: 'button', id: 'copy-results', text: 'Copy my results', onclick: function () { copyPlain(resUi, resultsText(), 'Results copied'); } }),
-      el('button', { class: 'btn', type: 'button', text: 'Clear', onclick: function () {
-        if (!confirm('Clear every result on this device?')) return;
-        store = { results: {} }; save();
-        Object.keys(cardUi).forEach(function (id) { cardUi[id].note.value = ''; paintCard(id); });
-        devInput.value = ''; progress();
-      } }),
+      clearBtn,
     ]),
-    resUi.msg, resUi.manual, out,
+    syncLine, resUi.msg, resUi.manual, out,
   ]));
   progress();
   window.__kit = data;
@@ -724,9 +778,11 @@ try {
     const css = await (await fetch(new URL('paste-test.css', import.meta.url))).text();
     // escape < and the two JS line separators so the JSON cannot close or break its script tag
     const BS = String.fromCharCode(92);
-    const json = JSON.stringify(data).split('<').join(BS + 'u003c')
-      .split(String.fromCharCode(0x2028)).join(BS + 'u2028').split(String.fromCharCode(0x2029)).join(BS + 'u2029');
-    const src = kitRuntime.toString().split('</script').join('<' + BS + '/script');
+    // Every non-ASCII code unit becomes a \uXXXX escape (valid in JSON, JS strings, regexes and
+    // comments), so the baked file is pure ASCII and survives any charset guess.
+    const asciiOnly = s => s.replace(/[^\x00-\x7e]/g, ch => BS + 'u' + ch.charCodeAt(0).toString(16).padStart(4, '0'));
+    const json = asciiOnly(JSON.stringify(data).split('<').join(BS + 'u003c'));
+    const src = asciiOnly(kitRuntime.toString().split('</script').join('<' + BS + '/script'));
     const html = [
       '<!doctype html>',
       '<!-- Typist paste test kit, baked ' + data.built + ' from dev/paste-test.html. Self-contained: no imports, no requests. -->',
@@ -744,6 +800,18 @@ try {
     if (/\r/.test(html)) throw new Error('CR in baked file');
     const res = await fetch('/__file?name=paste-test.html', { method: 'POST', body: new Blob([html], { type: 'text/html' }) });
     const info = await res.json();
+    // The claude.ai artifact wraps the file in its own doctype/head/body skeleton: title and
+    // style first, then the content, no document tags of our own.
+    const page = [
+      '<title>Typist paste test</title>',
+      '<meta name="color-scheme" content="light dark">',
+      '<style>\n' + css + '</style>',
+      '<div id="app"><p class="boot">Loading&hellip;</p></div>',
+      '<script id="kit-data" type="application/json">' + json + '</script>',
+      '<script>\n' + src + '\nkitRuntime(JSON.parse(document.getElementById(\'kit-data\').textContent));\n</script>',
+      '',
+    ].join('\n');
+    await fetch('/__file?name=paste-test.artifact.html', { method: 'POST', body: new Blob([page], { type: 'text/html' }) });
     window.__done = { ok: true, baked: info.bytes, cards: data.cards.length, modules: data.modules, buildMs: data.buildMs };
   } else {
     window.__done = { ok: true, cards: data.cards.length, modules: data.modules, buildMs: data.buildMs };

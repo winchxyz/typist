@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Typist looks</title>
+<style>
+  body { margin: 16px; background: #eceae4; color: #17171a; font: 13px/1.4 system-ui, sans-serif; }
+  canvas { display: block; margin: 0 0 24px; max-width: 100%; }
+  pre { font: 12px/1.4 ui-monospace, monospace; }
+</style>
+</head>
+<body>
+<!-- Tone LOOKS contact sheets (js/tone.js LOOKS through the real converter, Braille atkinson, drawn
+     with js/raster.js drawGrid):
+       node tests/shoot.mjs "/dev/looks.html"                 -> shots/looks.png + shots/looks_x.png
+       node tests/shoot.mjs "/dev/looks.html?tag=_it2"         -> shots/looks_it2.png + looks_x_it2.png
+       node tests/shoot.mjs "/dev/looks.html?perf=1" --throttle 4   tone change (toneGrid + dither), 60 x 40 -->
+<script type="module" src="./looks.js"></script>
+</body>
+</html>

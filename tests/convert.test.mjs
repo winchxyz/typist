@@ -4,7 +4,7 @@ import { performance } from 'node:perf_hooks';
 import { createConverter, gridLines, DITHERS, smallGridBoost } from '../js/convert.js';
 import { encodeBraille, brailleDots, ditherDots } from '../js/dither.js';
 import { QUAD_CP, BLOCK_SET, blocksQuad, labGrid } from '../js/blocks.js';
-import { sampleFromRGBA, decodeSource, toneGrid, TONE_DEFAULTS } from '../js/tone.js';
+import { sampleFromRGBA, decodeSource, toneGrid, TONE_DEFAULTS, LOOKS } from '../js/tone.js';
 
 let pass = 0, fail = 0;
 const results = [];
@@ -229,16 +229,21 @@ test('decode once: long side capped at 1024 by exact area averaging; samples are
   assert.ok(steps >= 6, 'smooth ramp, not a hard step: ' + steps);
 });
 
-test('tone: auto hits the ink target, brightness works with auto, gamma > 1 lightens', () => {
+test('tone: auto hits the ink target, brightness works with auto, gamma > 1 lightens (every look)', () => {
   const img = sampleFromRGBA(PHOTO.data, PHOTO.width, PHOTO.height, 80, 88, { crop: CROP });
   const mean = a => a.reduce((s, v) => s + v, 0) / a.length;
-  const base = toneGrid(img, TONE_DEFAULTS, { target: 0.4 });
-  assert.ok(Math.abs(base.stats.coverage - 0.4) < 0.08, 'coverage ' + base.stats.coverage);
-  const bright = toneGrid(img, { ...TONE_DEFAULTS, brightness: 0.6 }, { target: 0.4 });
-  assert.ok(mean(bright) > mean(base) + 0.05, 'brightness lightens under auto');
-  const g = toneGrid(img, { ...TONE_DEFAULTS, gamma: 2 }, { target: 0.4 });
-  assert.ok(mean(g) > mean(base) + 0.05, 'gamma 2 lightens');
-  const inv = toneGrid(img, { ...TONE_DEFAULTS, invert: true }, { target: 0.4 });
+  // soft solves the midtones for the target exactly; the others place regions first and only trim
+  const soft = toneGrid(img, { look: 'soft' }, { target: 0.4 });
+  assert.ok(Math.abs(soft.stats.coverage - 0.4) < 0.08, 'soft coverage ' + soft.stats.coverage);
+  for (const { id } of LOOKS) {
+    const base = toneGrid(img, { look: id }, { target: 0.4 });
+    assert.ok(base.stats.coverage > 0.15 && base.stats.coverage < 0.7, id + ' coverage ' + base.stats.coverage);
+    const bright = toneGrid(img, { look: id, brightness: 0.6 }, { target: 0.4 });
+    assert.ok(mean(bright) > mean(base) + 0.02, id + ': brightness lightens under auto');
+    const g = toneGrid(img, { look: id, gamma: 2 }, { target: 0.4 });
+    assert.ok(mean(g) > mean(base) + 0.01, id + ': gamma 2 lightens');
+  }
+  const inv = toneGrid(img, { ...TONE_DEFAULTS, look: 'soft', invert: true }, { target: 0.4 });
   // a mostly light photo cannot reach 0.4 dots inverted without crushing it: the solve is bounded
   assert.ok(inv.stats.coverage > 0.3 && inv.stats.coverage < 0.62, 'inverted coverage ' + inv.stats.coverage);
   assert.equal(smallGridBoost(16), 1); assert.equal(smallGridBoost(40), 0);
@@ -250,6 +255,95 @@ test('edges OR a thinned ridge into the dots', () => {
   const o = { mode: 'braille', cols: 40, rows: 22 };
   const a = conv.run(CROP, o), b = conv.run(CROP, { ...o, tone: { edges: 1 } });
   assert.ok(b.ink > a.ink, `edges add dots: ${a.ink.toFixed(3)} -> ${b.ink.toFixed(3)}`);
+});
+
+test('looks: TONE_DEFAULTS.look is photo; LOOKS lists 5 { id, name }; unknown look falls back', () => {
+  assert.equal(TONE_DEFAULTS.look, 'photo');
+  assert.deepEqual(LOOKS.map(l => l.id), ['photo', 'texture', 'sketch', 'soft', 'poster']);
+  for (const l of LOOKS) assert.ok(typeof l.name === 'string' && l.name.length > 0);
+  const img = sampleFromRGBA(PHOTO.data, PHOTO.width, PHOTO.height, 56, 60, { crop: CROP });
+  assert.deepEqual([...toneGrid(img, { look: 'nope' })], [...toneGrid(img, { look: 'photo' })]);
+  assert.equal(toneGrid(img, { look: 'nope' }).stats.look, 'photo');
+});
+
+test('looks: every look deterministic, finite, in [0, 1], with .edge and .stats (both themes, 3 sizes)', () => {
+  for (const [W, H] of [[2, 4], [56, 60], [120, 88]]) {
+    const img = sampleFromRGBA(PHOTO.data, PHOTO.width, PHOTO.height, W, H, { crop: CROP });
+    for (const { id } of LOOKS) for (const invert of [false, true]) {
+      const tone = { look: id, invert, edges: 0.3 };
+      const a = toneGrid(img, tone, { target: 0.4, boost: 0.5 }), b = toneGrid(img, tone, { target: 0.4, boost: 0.5 });
+      assert.deepEqual([...a], [...b], id + ' ' + W + 'x' + H + ' not deterministic');
+      for (let i = 0; i < a.length; i++) assert.ok(a[i] >= 0 && a[i] <= 1, id + ' ' + W + 'x' + H + ' L[' + i + '] = ' + a[i]);
+      assert.ok(a.edge && a.edge.mag.length === W * H, id + ' edge');
+      for (const k of ['lo', 'hi', 'gamma', 'coverage', 'std']) assert.ok(Number.isFinite(a.stats[k]), id + ' stats.' + k);
+    }
+  }
+});
+
+test('looks: invert puts the dots on the light half in every look (auto on)', () => {
+  const conv = createConverter();
+  conv.setSource(halves());
+  const count = (g, left) => {
+    let n = 0;
+    for (let r = 0; r < g.rows; r++) for (let c = 0; c < g.cols; c++) {
+      if ((c < g.cols / 2) !== left) continue;
+      for (let b = g.cp[r * g.cols + c] - 0x2800; b; b &= b - 1) n++;
+    }
+    return n;
+  };
+  for (const { id } of LOOKS) {
+    const g0 = conv.run({}, { mode: 'braille', cols: 20, rows: 11, tone: { look: id } });
+    const g1 = conv.run({}, { mode: 'braille', cols: 20, rows: 11, tone: { look: id, invert: true } });
+    assert.ok(count(g0, true) > 5 * count(g0, false), id + ': normal: dots on the dark (left) half');
+    assert.ok(count(g1, false) > 5 * count(g1, true), id + ': inverted: dots on the light (right) half');
+  }
+});
+
+test('looks: brightness moves the ink in both themes, every look (+ = lighter photo)', () => {
+  const conv = createConverter();
+  conv.setSource(PHOTO);
+  const o = { mode: 'braille', cols: 40, rows: 22 };
+  for (const { id } of LOOKS) for (const invert of [false, true]) {
+    const [dk, mid, lt] = [-0.6, 0, 0.6].map(b => conv.run(CROP, { ...o, tone: { look: id, invert, brightness: b } }).ink);
+    // light theme: lighter photo = fewer dots; dark theme: lighter photo = more lit dots
+    const ok = invert ? lt >= mid && mid >= dk && lt - dk > 0.05 : lt <= mid && mid <= dk && dk - lt > 0.05;
+    assert.ok(ok, id + (invert ? ' dark' : ' light') + ': ink at -0.6 / 0 / +0.6 = ' + [dk, mid, lt].map(v => v.toFixed(3)).join(' / '));
+  }
+});
+
+test('looks: the tone cache is keyed on the look; colour blocks stay soft', () => {
+  const conv = createConverter();
+  conv.setSource(PHOTO);
+  const o = { mode: 'braille', cols: 30, rows: 16 };
+  const a = conv.run(CROP, { ...o, tone: { look: 'photo' } });
+  const n = conv.stats.tones;
+  const b = conv.run(CROP, { ...o, tone: { look: 'poster' } });
+  assert.equal(conv.stats.tones, n + 1, 'a look change re-tones');
+  assert.notDeepEqual([...a.cp], [...b.cp], 'photo and poster differ');
+  assert.deepEqual([...conv.run(CROP, { ...o, tone: { look: 'photo' } }).cp], [...a.cp], 'back to photo from the cache');
+  const s = conv.stats.samples;
+  conv.run(CROP, { ...o, tone: { look: 'sketch' } });
+  assert.equal(conv.stats.samples, s, 'a look change never resamples');
+  const c1 = conv.run(CROP, { mode: 'blocks', cols: 30, rows: 16, color: true, tone: { look: 'photo' } });
+  const c2 = conv.run(CROP, { mode: 'blocks', cols: 30, rows: 16, color: true, tone: { look: 'soft' } });
+  assert.deepEqual([...c1.fg], [...c2.fg]);
+});
+
+const lookMs = {};
+test('looks: every look under 5 ms for a 120 x 88 grid (node, median)', () => {
+  const img = sampleFromRGBA(PHOTO.data, PHOTO.width, PHOTO.height, 120, 88, { crop: CROP });
+  for (const { id } of LOOKS) {
+    const xs = [];
+    for (let k = 0; k < 15; k++) {
+      const t0 = performance.now();
+      toneGrid(img, { look: id, brightness: (k % 5) / 10 }, { target: 0.4, boost: 0 });
+      if (k >= 3) xs.push(performance.now() - t0);
+    }
+    xs.sort((a, b) => a - b);
+    lookMs[id] = xs[xs.length >> 1];
+  }
+  const slow = Object.entries(lookMs).filter(([, v]) => v >= 5);
+  assert.deepEqual(slow, []);
 });
 
 const timing = {};
@@ -290,5 +384,6 @@ test('ASCII wiring (when ascii.js is present)', () => {
 
 console.log(results.join('\n'));
 console.log('timing (node, median ms):', JSON.stringify(Object.fromEntries(Object.entries(timing).map(([k, v]) => [k, +v.toFixed(2)]))));
+console.log('looks 120 x 88 (node, median ms):', JSON.stringify(Object.fromEntries(Object.entries(lookMs).map(([k, v]) => [k, +v.toFixed(2)]))));
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

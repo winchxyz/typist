@@ -1,21 +1,27 @@
-// Visual check for js/ascii.js: the Hopper photo, the four samples and a synthetic test card at 32
-// and 60 columns, drawn with raster.js drawGrid in the font the glyph vectors were made from.
+// Visual check for js/ascii.js: the Hopper photo, the four samples, a dark photo and a synthetic
+// test card at 32 and 60 columns, drawn with raster.js drawGrid in the font the glyph vectors were
+// made from. Each source gets [toned input | shape on plain levels | shape on the converter's tone]:
+//   levels = a plain grayscale resample at the matcher's own raster (8 x 17 per cell), 1 / 99 %
+//            levels: what the matcher does with a neutral input;
+//   tone   = exactly what the app shows: createConverter().run(mode 'ascii'), whose lightness is
+//            tone.js toneGrid on the converter's 4 x 8 per cell sample (recomputed here from the
+//            same exports so it can be drawn and dumped; the page checks that both give the same text).
 // Saves shots/<tag>_<cols>.png (overview) and shots/<tag>_<id>_<cols>.png (one source, big).
-// The lightness grid is a plain grayscale resample with 1% / 99% levels (the converter tones it
-// later; this page only needs a representative input).
-// tone=1 feeds the converter's own tone.js toneGrid (auto levels, detail, midtones solved for the
-// ASCII ink target) instead, which is what the app will show.
-// Query: tag=ascii2, contrast=1, ramp=1 (add the ramp method column), tone=1, save=0, only=hopper,card.
+// Query: tag=ascii3, contrast=1, ramp=1 (add a ramp column on the tone input), save=0,
+//        only=hopper,card, dump=1 (also save the lightness grids as raw float32 for node tuning:
+//        shots/<tag>_L_<id>_<cols>_<levels|tone>_<W>x<H>.f32), tune={json} (matcher overrides).
 import { asciiCells, ASCII_SUB, CELL_ASPECT, SHAPES_CURRENT } from '../js/ascii.js';
 import { FONT } from '../js/shape-vectors.js';
 import { drawGrid } from '../js/raster.js';
-import { toneGrid } from '../js/tone.js';
+import { createConverter, sampleSize, INK_TARGET } from '../js/convert.js';
+import { sampleImage, toneGrid, TONE_DEFAULTS } from '../js/tone.js';
 
 const q = new URLSearchParams(location.search);
 const contrast = q.has('contrast') ? +q.get('contrast') : 1;
-const TAG = q.get('tag') || 'ascii2';
+const TAG = q.get('tag') || 'ascii3';
 const WITH_RAMP = q.get('ramp') === '1';
-const TONED = q.get('tone') === '1';
+const DUMP = q.get('dump') === '1';
+const TUNE = q.get('tune') ? JSON.parse(q.get('tune')) : null;   // tuning overrides (exploration only)
 const FAMILY = (FONT && FONT.family) || 'monospace';
 const [SX, SY] = ASCII_SUB;
 const PAPER = '#fbfaf6', INK = '#17171a';
@@ -53,9 +59,9 @@ function testCard(size = 720) {
   return c;
 }
 
-// Square centre crop -> W x H lightness (sample pixels are not square: the crop maps onto the
-// cols x rows cell grid, as the real sampler does), composited over white, 1 / 99 % levels.
-function lightness(src, cols, rows) {
+// Plain levels: square centre crop -> W x H lightness at the matcher's raster, over white,
+// 1 / 99 % levels, no other tone work.
+function levelsL(src, cols, rows) {
   const W = cols * SX, H = rows * SY;
   const c = document.createElement('canvas');
   c.width = W; c.height = H;
@@ -67,12 +73,18 @@ function lightness(src, cols, rows) {
   const d = g.getImageData(0, 0, W, H).data;
   const L = new Float32Array(W * H);
   for (let i = 0; i < L.length; i++) L[i] = (0.2126 * d[i * 4] + 0.7152 * d[i * 4 + 1] + 0.0722 * d[i * 4 + 2]) / 255;
-  if (TONED) return { L: toneGrid({ W, H, L }, {}, { target: 0.4 }), W, H };
   const s = Float32Array.from(L).sort();
   const lo = s[Math.floor(s.length * 0.01)], hi = s[Math.floor(s.length * 0.99)];
   const span = Math.max(0.05, hi - lo);
   for (let i = 0; i < L.length; i++) L[i] = Math.min(1, Math.max(0, (L[i] - lo) / span));
   return { L, W, H };
+}
+
+// The converter's lightness for ASCII: its own sample size and toneGrid call (convert.js run()).
+function toneL(conv, cols, rows) {
+  const [W, H] = sampleSize({ mode: 'ascii', cols, rows });
+  const img = sampleImage(conv.decoded, {}, W, H);
+  return { L: toneGrid(img, { ...TONE_DEFAULTS }, { target: INK_TARGET.ascii, boost: 0 }), W, H };
 }
 
 function toLines(cp, cols, rows) {
@@ -101,34 +113,46 @@ async function save(name, canvas) {
   return (await r.json()).file;
 }
 
-// One block per source: [gray input | shape (| ramp)].
-function block(src, id, cols, cellW) {
+async function dump(name, L) {
+  await fetch('/__file?name=' + encodeURIComponent(name), { method: 'POST', body: new Uint8Array(L.buffer, L.byteOffset, L.byteLength) });
+}
+
+// One block per source: [tone input | shape on levels | shape on tone (| ramp on tone)].
+async function block(src, conv, id, cols, cellW) {
   const rows = Math.max(1, Math.round(cols * CELL_ASPECT));
   const cellH = cellW / CELL_ASPECT;
   const artW = cols * cellW, artH = rows * cellH;
   const PAD = 12, LABEL = 20;
-  const methods = WITH_RAMP ? ['shape', 'ramp'] : ['shape'];
+  const lv = levelsL(src, cols, rows), tn = toneL(conv, cols, rows);
+  if (DUMP) {
+    await dump(`${TAG}_L_${id}_${cols}_levels_${lv.W}x${lv.H}.f32`, lv.L);
+    await dump(`${TAG}_L_${id}_${cols}_tone_${tn.W}x${tn.H}.f32`, tn.L);
+  }
+  const cols3 = [['levels', lv, 'shape'], ['tone', tn, 'shape']];
+  if (WITH_RAMP) cols3.push(['tone', tn, 'ramp']);
   const canvas = document.createElement('canvas');
-  canvas.width = Math.ceil(artH + PAD + methods.length * (artW + PAD));
+  canvas.width = Math.ceil(artH + PAD + cols3.length * (artW + PAD));
   canvas.height = Math.ceil(artH + LABEL);
   const g = canvas.getContext('2d');
   g.fillStyle = PAPER; g.fillRect(0, 0, canvas.width, canvas.height);
-  const { L, W, H } = lightness(src, cols, rows);
-  drawGray(g, L, W, H, 0, LABEL, artH, artH);
+  drawGray(g, tn.L, tn.W, tn.H, 0, LABEL, artH, artH);
   g.fillStyle = '#6b6a66'; g.font = '13px system-ui';
-  g.fillText(`${id} input`, 0, LABEL - 6);
+  g.fillText(`${id} (tone input)`, 0, LABEL - 6);
   const res = {};
-  methods.forEach((method, m) => {
+  cols3.forEach(([kind, { L, W, H }, method], m) => {
     const t0 = performance.now();
-    const cp = asciiCells(L, W, H, cols, rows, { method, contrast });
+    const cp = asciiCells(L, W, H, cols, rows, { method, contrast, tune: TUNE });
     const ms = performance.now() - t0;
     const x = artH + PAD + m * (artW + PAD);
     drawGrid(g, { mode: 'ascii', cols, rows, cp }, { x, y: LABEL, cellW, cellH, ink: INK, paper: '#fff', font: `"${FAMILY}"` });
     g.fillStyle = '#6b6a66'; g.font = '13px system-ui';
-    g.fillText(`${id}  ${method}  ${cols} x ${rows}  ${ms.toFixed(1)} ms`, x, LABEL - 6);
-    res[method] = { ms: +ms.toFixed(2), lines: toLines(cp, cols, rows) };
+    g.fillText(`${id}  ${kind}  ${method}  ${cols} x ${rows}  ${ms.toFixed(1)} ms`, x, LABEL - 6);
+    res[kind + (method === 'ramp' ? 'Ramp' : '')] = { ms: +ms.toFixed(2), lines: toLines(cp, cols, rows), cp };
   });
-  return { canvas, res };
+  // the app's own path must give the same text as the tone column
+  const grid = conv.run({}, { mode: 'ascii', cols, rows, ascii: 'shape', asciiContrast: contrast });
+  const same = grid.cp.length === res.tone.cp.length && grid.cp.every((v, i) => v === res.tone.cp[i]);
+  return { canvas, res, same };
 }
 
 // Overview: blocks in a grid of `per` columns.
@@ -154,29 +178,32 @@ try {
     ['pet', '/img/samples/pet.jpg'],
     ['landmark', '/img/samples/landmark.jpg'],
     ['logo', '/img/samples/logo.jpg'],
+    ['dark', '/tests/fixtures/dark.jpg'],
   ];
   const only = q.get('only') ? q.get('only').split(',') : null;
   const sources = [];
   for (const [id, url] of list) if (!only || only.includes(id)) sources.push({ id, src: await loadBitmap(url) });
   if (!only || only.includes('card')) sources.push({ id: 'card', src: testCard() });
+  for (const s of sources) { s.conv = createConverter(); s.conv.setSource(s.src); }
   // Warm up (JIT) so the timings below are steady-state.
   for (let i = 0; i < 5; i++) {
-    const { L, W, H } = lightness(sources[0].src, 60, 28);
+    const { L, W, H } = levelsL(sources[0].src, 60, 28);
     asciiCells(L, W, H, 60, 28, { method: 'shape' });
   }
-  const files = [], text = {}, ms = {};
-  for (const [cols, cellW, per] of [[32, 12, 2], [60, 9, 2]]) {
+  const files = [], text = {}, ms = {}, mismatch = [];
+  for (const [cols, cellW, per] of [[32, 12, 2], [60, 9, 1]]) {
     const blocks = [];
-    for (const { id, src } of sources) {
-      const b = block(src, id, cols, cellW);
+    for (const { id, src, conv } of sources) {
+      const b = await block(src, conv, id, cols, cellW);
       blocks.push(b);
-      text[`${id}${cols}`] = b.res.shape.lines;
-      ms[`${id}${cols}`] = b.res.shape.ms;
+      if (!b.same) mismatch.push(`${id}${cols}`);
+      text[`${id}${cols}`] = b.res.tone.lines;
+      ms[`${id}${cols}`] = [b.res.levels.ms, b.res.tone.ms];
       files.push(await save(`${TAG}_${id}_${cols}`, b.canvas));
     }
     files.push(await sheet(`${TAG}_${cols}`, blocks, per));
   }
-  window.__done = { ok: true, font: FAMILY, shapesCurrent: SHAPES_CURRENT, contrast, files, ms, text };
+  window.__done = { ok: mismatch.length === 0, font: FAMILY, shapesCurrent: SHAPES_CURRENT, contrast, mismatch, files, ms, text };
 } catch (e) {
   window.__done = { ok: false, error: String(e && e.stack || e) };
 }

@@ -69,22 +69,38 @@ const GATE_TONE = 0.16, GATE_STRUCT = 0.3;
 // The tone weight eases off as structure grows (TONE_EASE): a thin line is light in tone but
 // must still draw as a stroke.
 const WT = 3, TONE_EASE = 0.75, WD0 = 0.25, WD1 = 2.2, STRUCT_FULL = 0.4;
-// Flat cells (circle ink range under FLAT_RANGE) skip the shape match and take the classic density
-// ramp by level: one glyph per tone band reads as even tone, where a shape match would pick among
-// many glyphs of similar density (brackets, letters) and draw false texture.
+// Tone and structure are decided separately (the way hand-made ASCII art is drawn): every cell
+// starts from the tone ramp, and only a cell whose ink is a clear stroke (enough contrast inside
+// the cell AND a stroke glyph that fits its shape) is drawn with that stroke. Before this, dense
+// letters (M W d b p q) competed on shape in every non-flat cell and drew letter soup in
+// gradients, hair and fabric; a poorly fitting stroke is now tone instead.
+// Flat cells (circle ink range under FLAT_RANGE) never try a stroke.
 const FLAT_RANGE = 0.3;
-/** Tone ramp for flat cells, light -> dark (Paul Bourke's classic 10 levels). */
-export const TONE_RAMP = ' .:-=+*#%@';
+// A stroke must fit the cell's (contrast-enhanced) ink direction with at least this cosine, and
+// may be at most TONE_GAP lighter than the cell (a dark cell with a little texture stays dark).
+const COS_MIN = 0.6, TONE_GAP = 0.42;
+// Local contrast before matching: an unsharp mask on the circle lattice (radius about one cell
+// width) makes eyes, glasses, nostrils and mouth darker than the skin around them and the skin
+// next to them lighter, so small facial features survive at 32 columns. LC is its strength.
+const LC = 0.9, LC_RX = 3, LC_RY = 2;
+// Ramp tone curve: ink^RAMP_GAMMA. Above 1 it keeps mid-grey skin light (few glyphs) while dark
+// areas stay dark, so a face reads as features on a clean ground instead of midtone texture.
+const RAMP_GAMMA = 1.6;
+/**
+ * Tone ramp, light -> dark: ten glyphs at nearly even measured coverage (0, .07, .15, .27, .34,
+ * .47, .58, .71, .81, 1.0 of '@'), so a gradient steps evenly ('&' fit the gap but read as noise
+ * sprinkled through dark fabric). Bourke's ' .:-=+*#%@'
+ * jumps from '*' (.27) to '#' (.71) and has '-' lighter than ':'.
+ */
+export const TONE_RAMP = ' .:*+xo#%@';
 
-// Glyphs the matcher may use and their penalty (added to the distance). Tier 0: strokes and tone
-// marks that read as shape; tier 1: a few letters that read as corners or texture; dense: fill for
-// dark areas (they win on density, not on shape). Everything else (most letters, digits, $ ? etc.)
-// reads as text at small sizes and is left out.
+// Glyphs the matcher may use as strokes and their penalty (added to the distance). Tier 0: strokes
+// and marks; tier 1: a peak and a blob; tier 2: brackets and a few letters that read as corners
+// and eyes. Dense glyphs come only from the tone ramp.
 const TIERS = [
   [" .,:;'\"-_=+|/\\()!", 0],
-  ['^*', 0.03],   // a peak and a blob: right sometimes, but they win small corners too easily
-  ['[]iloLTY', 0.05],
-  ['#%@&MWdbpq', 0.02],
+  ['^*', 0.03],   // right sometimes, but they win small corners too easily
+  ['[]oLTY<>', 0.05],
 ];
 // Shifted candidates pay SHIFT_PENALTY per 0.15 cell of offset, so a centred glyph wins near-ties;
 // only glyphs whose position is their meaning (strokes and marks) are tried shifted.
@@ -215,19 +231,44 @@ const CU = new Float64Array(NC * DIMS), CT = new Float64Array(NC), CPEN = new Fl
 const CAND_CP = new Uint32Array(NC);
 cand.forEach((c, i) => { CU.set(c.u, i * DIMS); CT[i] = c.t; CPEN[i] = c.pen; CAND_CP[i] = c.cp; });
 const SPACE_CAND = cand.findIndex(c => c.cp === 0x20);
+// Tone of an unshifted glyph (mean circle ink) straight from the data, for ramp glyphs that are not
+// stroke candidates.
+const glyphTone = ch => {
+  const gi = GLYPHS.indexOf(ch);
+  if (!DATA_OK || gi < 0) return 0;
+  let s = 0;
+  for (let k = 0; k < DIMS; k++) s += VECTORS[gi * NS * DIMS + k];
+  return s / DIMS;
+};
 // Tone curve: normalised ink -> target glyph tone, interpolated through the ramp glyphs' measured
-// tone (made monotone), so a structured cell gets the same density as the flat ramp would give it.
+// tone (made monotone), so a stroke cell gets the same density as the ramp would give it.
 const RAMP_CP = Uint32Array.from(TONE_RAMP, ch => ch.codePointAt(0));
 const RAMP_T = (() => {
-  const t = Array.from(TONE_RAMP, ch => { const c = cand.find(o => o.cp === ch.codePointAt(0) && !o.shift); return c ? c.t : 0; });
+  const t = Array.from(TONE_RAMP, glyphTone);
   for (let i = 1; i < t.length; i++) if (t[i] < t[i - 1]) t[i] = t[i - 1];
   return Float64Array.from(t);
 })();
-const TSCALE = NC ? Math.max(...CT) : 1;
+// Black maps to the densest ramp glyph.
+const TSCALE = RAMP_T[RAMP_T.length - 1] || 1;
 function toneTarget(ink) {
   const f = ink * (RAMP_T.length - 1), i = Math.min(RAMP_T.length - 2, f | 0);
   return RAMP_T[i] + (RAMP_T[i + 1] - RAMP_T[i]) * (f - i);
 }
+// Ramp glyph for a normalised ink level: the one whose measured coverage (relative to the densest)
+// is nearest, as a 256-step table.
+const RAMP_LUT = (() => {
+  const cmax = COVERAGE.length ? Math.max(...COVERAGE) : 1;
+  const cov = Array.from(TONE_RAMP, (ch, i) => (COVERAGE.length ? COVERAGE[GLYPHS.indexOf(ch)] / cmax : i / (TONE_RAMP.length - 1)));
+  const lut = new Uint32Array(257);
+  for (let i = 0; i <= 256; i++) {
+    const t = i / 256;
+    let b = 0;
+    for (let j = 1; j < cov.length; j++) if (Math.abs(cov[j] - t) < Math.abs(cov[b] - t)) b = j;
+    lut[i] = RAMP_CP[b];
+  }
+  return lut;
+})();
+const rampGlyph = t => RAMP_LUT[t <= 0 ? 0 : t >= 1 ? 256 : (t * 256 + 0.5) | 0];
 
 // For each circle, the lattice offsets [dx, dy] of the neighbouring circles that lie in another
 // cell (Harri's external circles): boundary circles have 3 or 5, inner ones none.
@@ -270,7 +311,7 @@ export function levelsOf(L) {
  * opts: method 'shape' | 'ramp'; ramp: dark -> light string; contrast: enhancement strength
  * (0 = off, 1 = default, 2 = strong).
  */
-export function asciiCells(L, W, H, cols, rows, { method = 'shape', ramp = RAMP, contrast = 1 } = {}) {
+export function asciiCells(L, W, H, cols, rows, { method = 'shape', ramp = RAMP, contrast = 1, tune = null } = {}) {
   const [SX, SY] = ASCII_SUB;
   if (W !== cols * SX || H !== rows * SY) {
     L = resampleL(L, W, H, cols * SX, rows * SY);
@@ -307,7 +348,18 @@ export function asciiCells(L, W, H, cols, rows, { method = 'shape', ramp = RAMP,
     }
   }
 
-  // 3. gate, 4. directional + global contrast, 5. nearest glyph
+  // 2b. local contrast: lat += LC * (lat - blur(lat)), clamped (unsharp mask on the lattice)
+  const P = { LC, COS_MIN, TONE_GAP, FLAT_RANGE, RAMP_GAMMA, ...tune };
+  const tR = powTable(P.RAMP_GAMMA);
+  if (P.LC > 0) {
+    const m = boxBlur2(lat, LW, LH, LC_RX, LC_RY);
+    for (let i = 0; i < lat.length; i++) {
+      const x = lat[i] + P.LC * (lat[i] - m[i]);
+      lat[i] = x > 0 ? (x < 1 ? x : 1) : 0;
+    }
+  }
+
+  // 3. gate, 4. directional + global contrast, 5. tone ramp or nearest stroke
   const eD = 1 + (DIRECTIONAL_EXP - 1) * contrast, eG = 1 + (GLOBAL_EXP - 1) * contrast;
   const tD = powTable(eD), tG = powTable(eG);
   const raw = new Float64Array(DIMS), v = new Float64Array(DIMS), u = new Float64Array(DIMS);
@@ -345,24 +397,53 @@ export function asciiCells(L, W, H, cols, rows, { method = 'shape', ramp = RAMP,
       // gate after directional contrast: ink that belongs to a darker neighbour (the edge of a
       // stroke that runs through the next cell) does not keep this cell from being paper
       if (vsum / DIMS < GATE_TONE && vmax - vmin < GATE_STRUCT) { out[r * cols + c] = 0x20; continue; }
-      if (range < FLAT_RANGE) {
-        const li = Math.floor(tone * RAMP_CP.length);
-        out[r * cols + c] = RAMP_CP[li < RAMP_CP.length ? li : RAMP_CP.length - 1];
-        continue;
-      }
+      const ramp = rampGlyph(powLerp(tR, tone));
+      if (range < P.FLAT_RANGE) { out[r * cols + c] = ramp; continue; }
       let n2 = 0;
       if (vmax > 0) {
         for (let k = 0; k < DIMS; k++) { const x = powLerp(tG, v[k] / vmax) * vmax * DIM_W[k]; v[k] = x; n2 += x * x; }
       }
-      if (!(n2 > 0)) { out[r * cols + c] = 0x20; continue; }
+      if (!(n2 > 0)) { out[r * cols + c] = ramp; continue; }
       const inv = 1 / Math.sqrt(n2);
       for (let k = 0; k < DIMS; k++) u[k] = v[k] * inv;
       const st = range >= STRUCT_FULL ? 1 : range / STRUCT_FULL;
-      prev = nearest(u, toneTarget(tone), WD0 + WD1 * st, WT * (1 - TONE_EASE * st) * invT * invT, prev);
-      out[r * cols + c] = CAND_CP[prev];
+      const g = nearest(u, toneTarget(tone), WD0 + WD1 * st, WT * (1 - TONE_EASE * st) * invT * invT, prev);
+      // the stroke must really fit, and must not punch a light hole into a dark cell
+      let a = 0;
+      for (let k = 0, o = g * DIMS; k < DIMS; k++) a += u[k] * CU[o + k];
+      if (a < P.COS_MIN || tone - CT[g] * invT > P.TONE_GAP) { out[r * cols + c] = ramp; continue; }
+      prev = g;
+      out[r * cols + c] = CAND_CP[g];
     }
   }
   return out;
+}
+
+// Separable box blur (two passes, edges clamped) of a W x H grid; returns a new array.
+function boxBlur2(src, W, H, rx, ry) {
+  const a = Float64Array.from(src), b = new Float64Array(src.length);
+  for (let pass = 0; pass < 2; pass++) {
+    for (let y = 0; y < H; y++) {
+      const o = y * W;
+      let s = 0;
+      for (let i = -rx; i <= rx; i++) s += a[o + (i < 0 ? 0 : i >= W ? W - 1 : i)];
+      for (let x = 0; x < W; x++) {
+        b[o + x] = s / (2 * rx + 1);
+        const add = x + rx + 1, sub = x - rx;
+        s += a[o + (add >= W ? W - 1 : add)] - a[o + (sub < 0 ? 0 : sub)];
+      }
+    }
+    for (let x = 0; x < W; x++) {
+      let s = 0;
+      for (let i = -ry; i <= ry; i++) s += b[(i < 0 ? 0 : i >= H ? H - 1 : i) * W + x];
+      for (let y = 0; y < H; y++) {
+        a[y * W + x] = s / (2 * ry + 1);
+        const add = y + ry + 1, sub = y - ry;
+        s += b[(add >= H ? H - 1 : add) * W + x] - b[(sub < 0 ? 0 : sub) * W + x];
+      }
+    }
+  }
+  return a;
 }
 
 // Brute force with partial-distance early exit, seeded with the previous cell's glyph (neighbours
