@@ -41,10 +41,11 @@ const UI_TARGETS = [
   { id: 'x', chip: 'X', tile: 'X post', key: '2' },
   { id: 'tg', chip: 'Telegram', tile: 'Telegram', key: '3' },
   { id: 'tgc', chip: 'Channel', tile: 'Telegram channel', key: '4' },
-  { id: 'file', chip: 'File', tile: 'File', key: '5' },
+  { id: 'reddit', chip: 'Reddit', tile: 'Reddit', key: '5' },
+  { id: 'file', chip: 'File', tile: 'File', key: '6' },
 ];
 const UI_IDS = new Set(UI_TARGETS.map(t => t.id));
-const PLACE = { ig: 'Instagram', x: 'X', xlong: 'X', tg: 'Telegram', tgc: 'Telegram channels', plain: 'files' };
+const PLACE = { ig: 'Instagram', x: 'X', xlong: 'X', tg: 'Telegram', tgc: 'Telegram channels', plain: 'files', reddit: 'Reddit' };
 // a file has no budget and no screen: these widths read well as an image or a .txt
 const FILE_COLS = { braille: 48, ascii: 72, blocks: 56 };
 const COLS_MIN = 4, COLS_MAX = 200;
@@ -377,7 +378,8 @@ function updateFit() {
 /** Braille with clean blanks slants in Telegram Desktop and Windows browsers (SPEC device finding). */
 function slantsOnWindows(r) {
   if (r.mode !== 'braille' || r.fopts.blank !== 'u2800') return false;
-  if (!(r.ui === 'tg' || r.ui === 'tgc' || state.device === 'windows')) return false;
+  // Telegram Desktop and Reddit are read on Windows desktops a lot, so they always get the note
+  if (!(r.ui === 'tg' || r.ui === 'tgc' || r.ui === 'reddit' || state.device === 'windows')) return false;
   // only when some row starts with blanks before its first dot (else nothing moves)
   const { cols, rows, cp } = grid;
   for (let y = 0; y < rows; y++) {
@@ -428,6 +430,7 @@ function budgetText(ui) {
   if (ui === 'x') return to.x === 'long' ? '25,000 (Premium)' : '280 characters';
   if (ui === 'tg') return '4,096 characters';
   if (ui === 'tgc') return to.tgc === 'caption' ? '1,024 (caption)' : '4,096 characters';
+  if (ui === 'reddit') return 'Post or comment';
   return 'PNG, SVG, HTML, text';
 }
 
@@ -447,14 +450,14 @@ function buildTargets() {
     card.title = `Shortcut: ${t.key}`;
     cards.append(card);
 
-    if (t.id !== 'file') {
-      const tile = document.createElement('button');
-      tile.type = 'button'; tile.className = 'wtile'; tile.setAttribute('role', 'radio'); tile.dataset.v = t.id;
-      tile.innerHTML = '<b></b><span></span>';
-      tile.querySelector('b').textContent = t.tile;
-      tile.querySelector('span').textContent = budgetText(t.id);
-      tiles.append(tile);
-    }
+    // six places, six tiles: a 2 x 3 grid on phones (File is a tile, not a link, since Reddit
+    // made the grid odd)
+    const tile = document.createElement('button');
+    tile.type = 'button'; tile.className = 'wtile'; tile.setAttribute('role', 'radio'); tile.dataset.v = t.id;
+    tile.innerHTML = '<b></b><span></span>';
+    tile.querySelector('b').textContent = t.id === 'file' ? 'Just a file' : t.tile;
+    tile.querySelector('span').textContent = budgetText(t.id);
+    tiles.append(tile);
   }
   for (const host of [row, cards, tiles]) {
     host.addEventListener('click', e => {
@@ -497,7 +500,25 @@ function syncTargetChecks() {
     const welcomeX = v === 'x' && el.closest('#welcomeTargets') && state.targetOpts.x !== 'long';
     el.textContent = welcomeX ? '280, or 25,000 with Premium' : budgetText(v);
   }
+  revealChip();
 }
+
+// The chip row scrolls sideways on phones: keep the selected chip fully in view (a target picked
+// on the welcome sheet, by key or from a deep link can sit past the edge). Only the row scrolls,
+// never the page.
+function revealChip() {
+  const row = $('targetRow');
+  const chip = row && row.querySelector('[aria-checked="true"]');
+  if (!chip || row.scrollWidth <= row.clientWidth) return;
+  const pad = 16, fade = 24;
+  const left = chip.offsetLeft - row.offsetLeft, right = left + chip.offsetWidth;
+  if (left - pad >= row.scrollLeft && right + fade <= row.scrollLeft + row.clientWidth) return;
+  // the row snaps to chip starts (scroll-snap proximity): an offset between two snap points is
+  // pulled back, so scroll to the chip's own start, or to the end of the row for the last chips
+  row.scrollLeft = Math.min(row.scrollWidth - row.clientWidth, Math.max(0, left - pad));
+}
+// the row has no size while the welcome sheet covers the editor: reveal once it gets one
+if (typeof ResizeObserver === 'function') new ResizeObserver(() => revealChip()).observe($('targetRow'));
 
 // Chip / card bars: green = fits as it is, amber = tight, grey = picking it resizes the art to
 // fit (the "Resizes to N wide" description), red = cannot fit even at its own best width.
@@ -553,7 +574,7 @@ function setTarget(ui) {
 }
 
 // ------------------------------------------------------------------------------------ actions
-const PRIMARY = { ig: 'Copy for Instagram', x: 'Post on X', xlong: 'Copy for X', tg: 'Copy for Telegram', tgc: 'Copy for the channel', plain: 'Download' };
+const PRIMARY = { ig: 'Copy for Instagram', x: 'Post on X', xlong: 'Copy for X', tg: 'Copy for Telegram', tgc: 'Copy for the channel', reddit: 'Copy for Reddit', plain: 'Download' };
 const actionSets = [];
 let copiedUntil = 0;
 
@@ -846,7 +867,7 @@ function segSet(el, v) {
 // ------------------------------------------------------------------------------------ Look panel
 function whyNot(mode, r) {
   const where = PLACE[r.id];
-  if (mode === 'ascii') return `Letters don’t line up on ${where}: it uses a proportional font. They do in Telegram.`;
+  if (mode === 'ascii') return `Letters don’t line up on ${where}: it uses a proportional font. They do in Telegram and Reddit.`;
   if (mode === 'blocks') {
     return r.id === 'tg' || r.id === 'tgc'
       ? 'Blocks don’t line up in Telegram chats. Choose File to save them as an image or text.'

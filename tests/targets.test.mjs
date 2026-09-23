@@ -168,6 +168,44 @@ test('Telegram channel: caption budget is 1,024', () => {
   assert.ok(!res.fits);
 });
 
+// ---------------------------------------------------------------- Reddit
+test('Reddit: every row is a 4-space-indented code block line, Braille rows carry no other space', () => {
+  const g = grid('braille', 5, 3, (x, y) => (x === y ? 0x28ff : x % 2 ? 0x20 : B));
+  const res = formatFor('reddit', g);
+  const ls = lines(res.text);
+  assert.equal(ls.length, 3);
+  for (const l of ls) {
+    assert.ok(l.startsWith('    ') && !l.startsWith('     '), JSON.stringify(l));
+    const art = l.slice(4);
+    assert.ok(!art.includes(' '), 'no U+0020 inside a Braille row');
+    assert.equal([...art].length, 5);
+  }
+  assert.equal(res.count, res.text.length);
+  assert.equal(res.count, countFor('reddit', 'braille', 5, 3));
+  assert.equal(res.limit, 10000);
+  assert.ok(!res.text.includes('\r') && !res.text.endsWith('\n'));
+  assert.ok(res.warnings.some(w => w.code === 'reddit-markdown' && w.level === 'info'));
+});
+
+test('Reddit: Letters are printable ASCII after the indent, backticks never survive, spacing kept', () => {
+  const g = grid('ascii', 6, 2, (x, y) => (y ? cps(' (o o)')[x] : [0x60, 0x20, 0x2f, 0x5f, 0x5c, 0x09][x]));
+  const res = formatFor('reddit', g);
+  assert.equal(res.text, "    ' /_\\ \n     (o o)");
+  assert.equal(res.count, countFor('reddit', 'ascii', 6, 2));
+  assert.equal(res.html, null);
+});
+
+test('Reddit: blocks warn, too-wide art says readers scroll sideways, autoFit fits a phone', () => {
+  assert.ok(formatFor('reddit', grid('blocks', 3, 1, () => 0x2588)).warnings.some(w => w.code === 'mode'));
+  const w = maxCols('reddit', 'braille', { phone: 390 });
+  const wide = formatFor('reddit', grid('braille', w + 3, 4, () => B));
+  const warn = wide.warnings.find(x => x.code === 'too-wide');
+  assert.ok(warn && /scroll sideways/.test(warn.message));
+  const fit = autoFit('reddit', 'braille');
+  assert.ok(fit.cols <= w && countFor('reddit', 'braille', fit.cols, fit.rows) <= 10000);
+  assert.ok(autoFit('reddit', 'ascii').cols > fit.cols, 'letters are narrower cells, so more fit');
+});
+
 test('Blocks: file-only; in a chat they warn, in plain text they pass through', () => {
   const g = grid('blocks', 3, 1, (x) => [0x2588, 0x20, 0x259a][x]);
   assert.ok(formatFor('tg', g).warnings.some(w => w.code === 'mode'));

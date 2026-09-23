@@ -74,7 +74,7 @@ async function run(browserName) {
   await page.waitForFunction(() => window.__done, null, { timeout: 60000 });
   await page.waitForFunction(() => window.TY && window.TY.welcomeDone, null, { timeout: 20000 });
   check('welcome: sheet visible', await page.isVisible('#welcome'));
-  check('welcome: 4 target tiles + 4 samples', (await page.locator('#welcomeTargets [data-v]').count()) === 4 && (await page.locator('#samples .sample').count()) === 4);
+  check('welcome: 6 target tiles (Reddit and File included) + 4 samples', (await page.locator('#welcomeTargets [data-v]').count()) === 6 && (await page.locator('#samples .sample').count()) === 4);
   await page.click('#welcomeTargets [data-v="x"]');
   check('welcome: tile picks X', await TY(() => window.TY.state.target) === 'x');
   await page.click('#welcomeTargets [data-v="ig"]');
@@ -89,8 +89,8 @@ async function run(browserName) {
   check('upload: fit line says Fits (or the Windows slant note)', /Fits|Tight|Slants on Windows/.test(s.fit), s.fit);
 
   // ---------------------------------------------------------------- targets
-  const expectLabel = { ig: 'Copy for Instagram', x: 'Post on X', tg: 'Copy for Telegram', tgc: 'Copy for the channel', file: 'Download' };
-  for (const t of ['x', 'tg', 'tgc', 'file', 'ig']) {
+  const expectLabel = { ig: 'Copy for Instagram', x: 'Post on X', tg: 'Copy for Telegram', tgc: 'Copy for the channel', reddit: 'Copy for Reddit', file: 'Download' };
+  for (const t of ['x', 'tg', 'tgc', 'reddit', 'file', 'ig']) {
     await page.click(`#targetRow [data-v="${t}"]`);
     await settle();
     s = await TY(() => {
@@ -222,6 +222,18 @@ async function run(browserName) {
   }, undefined, { toast: /Paste it into any chat/ });
   check('telegram letters: payload is a ``` fence', await TY(() => TY.payload.text.startsWith('```\n') && TY.payload.text.endsWith('\n```')));
   await copyCase('Channel', target('tgc'), undefined, { toast: /channel/ });
+  // Reddit: the art only survives in a Markdown code block, every row indented by 4 spaces
+  await copyCase('Reddit (letters, code block)', target('reddit'), undefined, { toast: /Markdown mode/ });
+  s = await TY(() => ({ mode: TY.payload.mode, lines: TY.payload.text.split('\n') }));
+  check('reddit letters: every row is a 4-space code block line of printable ASCII',
+    s.mode === 'ascii' && s.lines.every(l => /^ {4}[\x20-\x5f\x61-\x7e]*$/.test(l)), s.lines[0]);
+  await copyCase('Reddit (dots, code block)', async () => {
+    await page.click('#tab-look');
+    await page.click('#styleSeg [data-v="braille"]');
+  }, undefined, { toast: /Markdown mode/ });
+  s = await TY(() => ({ mode: TY.payload.mode, lines: TY.payload.text.split('\n') }));
+  check('reddit dots: 4-space indent, then Braille only',
+    s.mode === 'braille' && s.lines.every(l => /^ {4}[\u2800-\u28ff]+$/.test(l)), s.lines[0]);
   await copyCase('X (Copy)', target('x'), '#actionBar .sec-btn', { toast: /new post/ });
   await copyCase('X long', async () => { await page.click('#tab-size'); await page.click('#variantSeg [data-v="long"]'); }, undefined, { toast: /Premium/ });
   await page.click('#variantSeg [data-v="post"]');
@@ -270,7 +282,7 @@ async function run(browserName) {
   if (d) check('download HTML: a page with the art', d.name.endsWith('.html') && /<pre/.test(d.buf.toString('utf8')), d.name);
 
   // the PNG button on every target and mode
-  const cases = [['ig', 'braille'], ['x', 'braille'], ['tg', 'braille'], ['tg', 'ascii'], ['tgc', 'braille'], ['file', 'braille'], ['file', 'ascii'], ['file', 'blocks']];
+  const cases = [['ig', 'braille'], ['x', 'braille'], ['tg', 'braille'], ['tg', 'ascii'], ['tgc', 'braille'], ['reddit', 'braille'], ['reddit', 'ascii'], ['file', 'braille'], ['file', 'ascii'], ['file', 'blocks']];
   for (const [t, mode] of cases) {
     await page.click(`#targetRow [data-v="${t}"]`);
     await TY(m => { TY.state.mode = m; TY.state.cols = null; TY.render(); }, mode);

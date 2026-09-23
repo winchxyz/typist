@@ -3,7 +3,7 @@
 </h1>
 
 <p align="center">
-  Turn any photo into text art you can paste into an Instagram comment, an X post or a Telegram message.
+  Turn any photo into text art you can paste into an Instagram comment, an X post, a Telegram message or a Reddit post.
 </p>
 
 <p align="center">
@@ -38,7 +38,8 @@ photo never leaves your device.
 ## Features
 
 - **Made for where it goes.** Instagram comment, X post (free, 280) or X long post (Premium,
-  25,000), Telegram message, Telegram channel post or photo caption, or a file. The target sets the
+  25,000), Telegram message, Telegram channel post or photo caption, Reddit post or comment, or a
+  file. The target sets the
   style, the width and the character budget, and the art resizes to the largest grid that fits.
 - **Five looks:** Photo, Texture, Sketch, Soft and Poster, shown as thumbnails of your own photo at
   the size you are making.
@@ -50,11 +51,11 @@ photo never leaves your device.
   Android, Windows), light and dark. Rows that would wrap are marked where they break.
 - **One button per place:** Copy for Instagram; Post on X (opens the X composer with the art filled
   in and puts it on your clipboard too); Copy for X for a Premium long post; Copy for Telegram or
-  for the channel. On Telegram, Share opens the share sheet on a phone, and on desktop Open hands
-  short art to Telegram through a t.me link.
+  for the channel; Copy for Reddit (a Markdown code block). On Telegram, Share opens the share sheet
+  on a phone, and on desktop Open hands short art to Telegram through a t.me link.
 - **A PNG button on every target** (2× or 4×; on a phone it goes through the share sheet, so it can
   land in Photos). The File target adds SVG, HTML (colour blocks keep their colours) and .txt.
-- Undo and redo; drop or paste a photo anywhere; desktop keys: C copy, 1 to 5 targets, [ and ]
+- Undo and redo; drop or paste a photo anywhere; desktop keys: C copy, 1 to 6 targets, [ and ]
   width, I invert, F crop, S PNG.
 
 <p align="center">
@@ -80,6 +81,7 @@ text colour of the app it lands in.
 | X long post (Premium) | 25,000 | Weighted, same rules | Dots | The timeline shows about the first 280, then Show more. Typist marks that fold (27 × 15 shows 5 rows). |
 | Telegram message | 4,096 | UTF-16 code units | Dots, or Letters in a code block | 24 × 14 Dots on a phone. Letters only line up inside a code block: 32 wide on a phone, 72 on desktop. |
 | Telegram channel | 4,096, photo caption 1,024 | UTF-16 code units | Dots, or Letters in a code block | 27 × 16 Dots (447 characters) fit a text post and a photo caption. |
+| Reddit post or comment | 10,000 in a comment, 40,000 in a post | UTF-16 code units, the indents included | Dots, or Letters, both in a code block | Reddit joins single lines into one paragraph, so every row is indented 4 spaces: a Markdown code block, which keeps the line breaks on new Reddit, old.reddit and the apps. On reddit.com switch the editor to Markdown mode before pasting. 35 × 19 Dots or 43 × 19 Letters fit a 390 px phone; wider art scrolls sideways. |
 | File | none | | Dots, Letters, Blocks | PNG, SVG, HTML, .txt |
 
 **Why the blanks are U+2800.** Instagram and X set text in proportional fonts, where a space and a

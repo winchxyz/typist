@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Typist: any photo, in text</title>
-<meta name="description" content="Turn any photo into text art (Braille dots, ASCII letters or blocks) that pastes cleanly into an Instagram comment, an X post or a Telegram message. Runs in your browser; your photo is never uploaded.">
+<meta name="description" content="Turn any photo into text art (Braille dots, ASCII letters or blocks) that pastes cleanly into an Instagram comment, an X post, a Telegram message or a Reddit post. Runs in your browser; your photo is never uploaded.">
 <meta name="theme-color" content="#e7e3dc" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#161514" media="(prefers-color-scheme: dark)">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
@@ -215,7 +215,7 @@
   <p class="lede">Text art you can paste into a comment, a post or a chat.</p>
   <div class="w-label" id="wTargetsLabel">Where will you paste it?</div>
   <div class="w-targets" id="welcomeTargets" role="radiogroup" aria-labelledby="wTargetsLabel"></div>
-  <button type="button" class="link-btn" id="wFile" role="radio" aria-checked="false">Just save a file</button>
+  <button type="button" class="link-btn" id="wFile" role="radio" aria-checked="false" hidden>Just save a file</button>
   <div class="w-actions">
     <button type="button" class="btn primary big grow" id="btnChoose"><svg class="ic"><use href="#i-image"/></svg>Choose a photo</button>
     <button type="button" class="btn secondary big touch-only" id="btnCamera"><svg class="ic"><use href="#i-camera"/></svg>Take a photo</button>

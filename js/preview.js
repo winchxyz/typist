@@ -145,6 +145,7 @@ export function payloadRows(payload, grid) {
   if (payload && typeof payload.text === 'string') {
     let body = payload.text;
     if (mode === 'ascii') body = body.replace(/^```\n/, '').replace(/\n```$/, '');
+    if (payload.target === 'reddit') body = body.split('\n').map(l => l.replace(/^ {4}/, '')).join('\n');
     rows = body.split('\n').map(l => Array.from(l, ch => ch.codePointAt(0)));
   } else if (grid) {
     rows = [];
@@ -188,7 +189,13 @@ const PAL = {
     dark: { bg: '#161514', head: '#1f1e1c', text: '#edeae4', muted: '#a19c93', line: '#2e2c29', accent: '#8aa6ff', card: '#232220' },
   },
 };
-const FAMILY = { ig: 'ig', x: 'x', xlong: 'x', tg: 'tg', tgc: 'tg', plain: 'plain' };
+PAL.rd = {
+  light: { bg: '#ffffff', head: '#ffffff', text: '#101517', muted: '#5c6c73', line: '#e6ebed', accent: '#2f6fd6',
+           avatar: '#d7dde0', glyph: '#ffffff', code: '#eef1f3' },
+  dark: { bg: '#0d1113', head: '#0d1113', text: '#eaf0f2', muted: '#8a9ba3', line: '#232b2f', accent: '#7ab0ff',
+          avatar: '#2f3a3f', glyph: '#9aa8ae', code: '#1b2226' },
+};
+const FAMILY = { ig: 'ig', x: 'x', xlong: 'x', tg: 'tg', tgc: 'tg', plain: 'plain', reddit: 'rd' };
 const BAD = { light: { band: 'rgba(209,31,31,.14)', pill: '#d11f1f', pillText: '#ffffff' },
               dark: { band: 'rgba(255,123,112,.16)', pill: '#ff7b70', pillText: '#2a0c09' } };
 const FONTS = {
@@ -240,6 +247,14 @@ const CSS = `
 
 .pv-ig .pv-head{height:58px;justify-content:center;padding-top:6px}
 .pv-ig .pv-titles{align-items:center;text-align:center}
+.pv-rdrow{position:relative;padding:12px 14px 10px 14px}
+.pv-rdname{display:flex;align-items:center;gap:7px;font-size:12.5px;line-height:18px;margin-bottom:8px}
+.pv-rdname .pv-av{width:24px;height:24px}
+.pv-rdname b{font-weight:600}
+.pv-rdcode{position:relative;padding:9px 10px;border-radius:6px;background:var(--pv-code);overflow:hidden}
+.pv-rdacts{display:flex;align-items:center;gap:14px;height:34px;margin-top:6px;font-size:12px;font-weight:600;color:var(--pv-muted)}
+.pv-rdacts span{display:flex;align-items:center;gap:5px}
+.pv-rdacts svg{width:16px;height:16px}
 .pv-igrow{position:relative;display:grid;grid-template-columns:32px auto;column-gap:12px;padding:14px 0 16px 16px}
 .pv-igrow .pv-av{width:32px;height:32px}
 .pv-igname{font-size:13px;line-height:18px;margin-bottom:2px}
@@ -329,6 +344,8 @@ const ICON = {
   share: '<path d="M12 3.5v11M7.5 8L12 3.5 16.5 8"/><path d="M5 13.5V19a1.5 1.5 0 0 0 1.5 1.5h11A1.5 1.5 0 0 0 19 19v-5.5"/>',
   more: '<circle cx="5.5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="18.5" cy="12" r="1.3"/>',
   checks: '<path d="M2.5 12.5l3.8 3.8L14 8.5"/><path d="M10.8 15.8l.9.8L19.5 8.5"/>',
+  up: '<path d="M12 4.5l6.5 7.5h-4v7h-5v-7h-4z"/>',
+  down: '<path d="M12 19.5l6.5-7.5h-4v-7h-5v7h-4z"/>',
   eye: '<path d="M2.5 12S6 6.5 12 6.5 21.5 12 21.5 12 18 17.5 12 17.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.7"/>',
   image: '<rect x="3.5" y="4.5" width="17" height="15" rx="3"/><path d="M3.8 16.5l4.7-4.7 4 4 2.8-2.8 4.9 4.9"/><circle cx="15.5" cy="9.3" r="1.5"/>',
 };
@@ -360,6 +377,7 @@ const TITLES = {
   tg: { title: 'Alex', sub: 'Telegram · online' },
   tgc: { title: 'Your channel', sub: 'Telegram channel · 1,204 subscribers' },
   plain: { title: 'Text file', sub: '' },
+  reddit: { title: 'Comments', sub: 'Reddit' },
 };
 
 /**
@@ -477,7 +495,7 @@ export function renderPreview(host, {
     '--pv-bg': pal.bg, '--pv-head': pal.head, '--pv-text': pal.text, '--pv-muted': pal.muted, '--pv-line': pal.line,
     '--pv-avatar': pal.avatar || pal.line, '--pv-glyph': pal.glyph || pal.muted, '--pv-bubble': pal.bubble || pal.bg,
     '--pv-meta': pal.meta || pal.muted, '--pv-card': pal.card || pal.bg, '--pv-cardmeta': pal.cardMeta || pal.muted,
-    '--pv-pre': pal.pre || 'transparent', '--pv-prebar': pal.preBar || pal.accent,
+    '--pv-pre': pal.pre || 'transparent', '--pv-prebar': pal.preBar || pal.accent, '--pv-code': pal.code || 'transparent',
     '--pv-band': bad.band, '--pv-pill': bad.pill, '--pv-pill-text': bad.pillText,
     '--pv-font': FONTS[device] || FONTS.ios, '--pv-r': (RADIUS[device] ?? 18) + 'px',
     '--pv-edge': theme === 'dark' ? 'rgba(255,255,255,.08)' : 'rgba(0,0,0,.08)',
@@ -652,6 +670,21 @@ export function renderPreview(host, {
       body.appendChild(bubble);
     }
     screen.appendChild(body);
+  } else if (fam === 'rd') {
+    head(header(doc, { ...t, center: true }));
+    const row = el(doc, 'div', 'pv-rdrow');
+    const name = el(doc, 'div', 'pv-rdname');
+    name.appendChild(avatar(24));
+    name.insertAdjacentHTML('beforeend', '<b>you</b><span class="pv-muted">· now</span>');
+    row.appendChild(name);
+    // a code block is a full-width box that scrolls sideways; the art sits at its left
+    const code = el(doc, 'div', 'pv-rdcode');
+    code.appendChild(wrap);
+    row.appendChild(code);
+    row.appendChild(el(doc, 'div', 'pv-rdacts',
+      `<span>${svg('up')}1${svg('down')}</span><span>${svg('reply')}Reply</span><span>${svg('share')}Share</span>`));
+    if (chipEl) row.appendChild(chipEl);
+    screen.appendChild(row);
   } else {
     head(header(doc, { title: t.title, sub: `typist-${target === 'plain' ? 'file' : target}-${cols}x${nRows}.txt`, back: false }));
     const body = el(doc, 'div', 'pv-body');

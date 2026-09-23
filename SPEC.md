@@ -331,3 +331,13 @@ Every artwork can be saved as a PNG from every target, not only from File:
 - Also offer PNG from each Look thumbnail's long-press / context menu (downloads that look's art).
 - e2e: the download event fires with a valid PNG (check the signature and the pixel size) for every
   target and mode.
+
+### Reddit target (2026-09-23)
+`reddit` in js/targets.js: a post or a comment (limit 10,000, the comment budget; posts take
+40,000). Reddit Markdown joins single lines into one paragraph, so the payload is a code block:
+every row indented by 4 spaces (`TARGETS.reddit.indent`), which works on new Reddit, old.reddit and
+the apps (``` does not work on old.reddit). Dots (U+2800 blanks, no U+0020 after the indent) or
+Letters (printable ASCII, the fence rules). Counts include the indents. A code block scrolls
+sideways instead of wrapping, so too-wide art warns that readers scroll. FIT.reddit: ~13 px
+monospace, Braille 0.75 em, ASCII 0.6 em, text column = screen - 48. The copy toast says to switch
+reddit.com's editor to Markdown mode; the preview is a generic comment with a grey code block.

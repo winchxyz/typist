@@ -28,6 +28,11 @@ export const TARGETS = {
          modes: ['braille', 'ascii'], defaultMode: 'braille' },
   plain: { id: 'plain', name: 'Plain text', short: 'Text', limit: Infinity, counter: 'utf16',
            modes: ['braille', 'ascii', 'blocks'], defaultMode: 'braille' },
+  // Reddit Markdown joins single lines into one paragraph, so art only survives in a code block:
+  // every row indented by 4 spaces (works on new Reddit, old.reddit and the apps, unlike ```).
+  // A comment takes 10,000 characters, a post 40,000; the smaller one is the budget.
+  reddit: { id: 'reddit', name: 'Reddit post or comment', short: 'Reddit', limit: 10000, postLimit: 40000,
+            counter: 'utf16', modes: ['braille', 'ascii'], defaultMode: 'braille', indent: 4 },
 };
 
 // How big a cell is on the target and how wide its text column is, per mode.
@@ -55,6 +60,12 @@ export const FIT = {
     braille: { ...BRAILLE_PROP, text: [1, 32], desktop: 100 },
     ascii: { fontPx: 15, cellEm: 0.6, lineEm: 1.3, text: [1, 32], desktop: 120 },
     blocks: { fontPx: 15, cellEm: 0.6, lineEm: 1.2, text: [1, 32], desktop: 120 },
+  },
+  // a code block in Reddit's monospace, about 13 px on phones; Braille glyphs come from the
+  // system's Braille font (~0.75 em a cell) even inside it
+  reddit: {
+    braille: { fontPx: 13, cellEm: 0.75, lineEm: 1.35, text: [1, 48], desktop: 72 },
+    ascii: { fontPx: 13, cellEm: 0.6, lineEm: 1.35, text: [1, 48], desktop: 96 },
   },
 };
 
@@ -105,7 +116,7 @@ export function countFor(id, mode, cols, rows, opts = {}) {
   const t = target(id);
   const cells = cols * rows, breaks = Math.max(0, rows - 1);
   if (t.counter === 'x') return 2 * cells + breaks;
-  return cells + breaks + (fencedAscii(id, mode) ? 8 : 0);
+  return cells + breaks + (fencedAscii(id, mode) ? 8 : 0) + (t.indent || 0) * rows;
 }
 
 /** Largest grid (square crop) that fits both the budget and the phone. */
@@ -195,14 +206,17 @@ export function formatFor(id, grid, opts = {}) {
   const warnings = [];
   const { cols, rows } = cellsOf(grid);
 
+  // Reddit's code block is monospace like a Telegram pre block: printable ASCII for letters
+  const codeBlock = !!t.indent;
   let cellFn;
-  if (fenced) cellFn = fenceCell;
+  if (fenced || (codeBlock && mode === 'ascii')) cellFn = fenceCell;
   else if (mode === 'braille') cellFn = brailleCell(blank);
-  else if (id === 'plain') cellFn = plainCell(mode);
+  else if (id === 'plain' || codeBlock) cellFn = plainCell(mode);
   else cellFn = chatCell(mode, blank);
   const { lines, foreign } = mapRows(grid, cellFn);
 
-  const body = lines.join('\n');
+  const pad = ' '.repeat(t.indent || 0);
+  const body = (pad ? lines.map(l => pad + l) : lines).join('\n');
   const text = (fenced ? '```\n' + body + '\n```' : body).normalize('NFC');
   const html = fenced ? '<pre>' + escapeHtml(body) + '</pre>' : null;
 
@@ -233,10 +247,12 @@ export function formatFor(id, grid, opts = {}) {
       message: `${over.toLocaleString('en-US')} over the ${limit.toLocaleString('en-US')} limit. ${fit.cols} columns fit.` });
   }
   if (wraps) {
+    // a Reddit code block does not wrap: it scrolls sideways, which hides the art's right side
+    const what = codeBlock ? 'readers have to scroll sideways' : 'rows will wrap';
     warnings.push({ code: 'too-wide', level: 'warn', fitCols: widest,
       message: phone === 'desktop'
-        ? `Wider than the desktop app (${widest} columns): rows will wrap.`
-        : `Wider than a ${phone} px phone (${widest} columns): rows will wrap.` });
+        ? `Wider than the desktop app (${widest} columns): ${what}.`
+        : `Wider than a ${phone} px phone (${widest} columns): ${what}.` });
   }
   if (foreign) warnings.push({ code: 'foreign', level: 'warn', message: `${foreign} characters could not be shown and became blanks.` });
   if (t.counter === 'x' && findUrlsX(text).length) {
@@ -245,6 +261,10 @@ export function formatFor(id, grid, opts = {}) {
   if (foldRow != null) {
     warnings.push({ code: 'fold', level: 'info', foldRow,
       message: `The timeline shows about ${foldRow} rows, then “Show more”.` });
+  }
+  if (codeBlock) {
+    warnings.push({ code: 'reddit-markdown', level: 'info',
+      message: 'On reddit.com switch the editor to Markdown mode, then paste the art on its own line.' });
   }
   if (id === 'ig') {
     if (rows > 12) warnings.push({ code: 'ig-more', level: 'info', message: 'Long comments can fold behind “more”.' });

@@ -182,6 +182,9 @@ export function copiedHint(target, payload = {}) {
       ? `Copied. Paste it into a new post (Premium). The timeline shows ${fmt(payload.foldRow)} rows, then Show more.`
       : 'Copied. Paste it into a new post (Premium).';
     case 'tg': case 'tgc': return TG_HINT({ ...payload, target });
+    // Reddit's rich-text editor turns every line into its own paragraph: Markdown mode keeps the
+    // 4-space code block that holds the art together
+    case 'reddit': return 'Copied. On reddit.com switch to Markdown mode, then paste it on its own line.';
     default: return 'Copied as plain text.';
   }
 }
