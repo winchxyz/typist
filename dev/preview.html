@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Typist preview sheet</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400&family=Instrument+Serif:ital@0;1&display=swap">
+<style>
+  :root { --desk: #e7e3dc; --text: #1c1b19; --muted: #6e6a63; --bad: #d11f1f; --ok: #17803d; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 28px 32px 40px; background: var(--desk); color: var(--text);
+         font: 13px/1.45 Geist, system-ui, sans-serif; -webkit-font-smoothing: antialiased; width: max-content; }
+  h1 { margin: 0; font: italic 400 34px/1 'Instrument Serif', Georgia, serif; }
+  .lede { margin: 6px 0 22px; color: var(--muted); max-width: 900px; }
+  .sheet { display: grid; column-gap: 28px; row-gap: 36px; align-items: start; }
+  .colhead { font-weight: 600; font-size: 13px; padding-bottom: 2px; border-bottom: 1px solid rgba(28,27,25,.14); }
+  .colhead span { display: block; font-weight: 400; color: var(--muted); font-size: 12px; }
+  .rowhead { position: sticky; left: 0; padding-top: 8px; }
+  .rowhead b { display: block; font-size: 15px; font-weight: 600; }
+  .rowhead span { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .cell { display: flex; flex-direction: column; gap: 8px; }
+  .note { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .note .bad { color: var(--bad); font-weight: 600; }
+  .note .ok { color: var(--ok); font-weight: 600; }
+  .err { color: var(--bad); white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<!-- Preview contact sheet for js/preview.js.
+       node tests/preview-shot.mjs                      -> shots/preview_sheet.png + shots/preview_row_<id>.png
+       node tests/preview-shot.mjs --path "/dev/preview.html?phone=360" --out shots/preview_sheet_360.png
+     Query: phone=360|390|430, rows=ig,x (subset), cols=ios-light,wide (subset). -->
+<h1>Typist · previews</h1>
+<p class="lede" id="lede"></p>
+<div class="sheet" id="sheet"></div>
+<script type="module" src="./preview.js"></script>
+</body>
+</html>

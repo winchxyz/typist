@@ -1,0 +1,13 @@
+{
+  "name": "Typist: any photo, in text",
+  "short_name": "Typist",
+  "description": "Turn any photo into Braille, ASCII or block text art that pastes cleanly into Instagram, X and Telegram.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#e7e3dc",
+  "theme_color": "#e7e3dc",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

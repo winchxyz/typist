@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Typist crop frame</title>
+<!-- Crop frame lab (js/crop.js). node tests/shoot.mjs "/dev/crop.html?photo=pet;crop=0.5,0.45,1.4,0" --w 390 --h 844
+     Query: photo=pet|portrait|landmark|logo|<fixture file> · crop=x,y,zoom,rotation · theme=light|dark
+            buttons=0 (no Cancel / Done in the bar) · shot=<name> (saves shots/<name>.png of the frame canvas)
+     Test hooks: window.CR = { cropper, photo, log, check(N), art() }; window.__done after the first check. -->
+<style>
+  :root {
+    --desk: #e7e3dc; --chrome: #faf9f6; --surface: #ffffff; --surface-2: #f3f1ec;
+    --border: rgba(28, 27, 25, .10); --border-strong: rgba(28, 27, 25, .18);
+    --text: #1c1b19; --text-muted: #6e6a63;
+    --accent: #2448c8; --accent-ink: #ffffff; --accent-soft: rgba(36, 72, 200, .12); --focus: #2448c8;
+    --radius-ctl: 8px; --radius-chip: 10px; --radius-sheet: 16px; --ease: cubic-bezier(.2, 0, 0, 1);
+    --serif: 'Instrument Serif', 'Iowan Old Style', 'Palatino Linotype', Georgia, serif;
+    --sans: 'Geist', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    --ok: #17803d;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --desk: #161514; --chrome: #1f1e1c; --surface: #2a2926; --surface-2: #33312d;
+      --border: rgba(255, 255, 255, .10); --border-strong: rgba(255, 255, 255, .18);
+      --text: #edeae4; --text-muted: #a19c93; --accent: #8aa6ff; --accent-ink: #10131c;
+      --accent-soft: rgba(138, 166, 255, .16); --focus: #8aa6ff; --ok: #5bd083; color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --desk: #161514; --chrome: #1f1e1c; --surface: #2a2926; --surface-2: #33312d;
+    --border: rgba(255, 255, 255, .10); --border-strong: rgba(255, 255, 255, .18);
+    --text: #edeae4; --text-muted: #a19c93; --accent: #8aa6ff; --accent-ink: #10131c;
+    --accent-soft: rgba(138, 166, 255, .16); --focus: #8aa6ff; --ok: #5bd083; color-scheme: dark;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body { margin: 0; background: var(--desk); color: var(--text); font: 13px/1.45 var(--sans);
+    -webkit-font-smoothing: antialiased; }
+  .top { height: 48px; display: flex; align-items: center; justify-content: space-between; padding: 0 16px;
+    background: var(--chrome); border-bottom: 1px solid var(--border); }
+  .mark { font: italic 24px/1 var(--serif); letter-spacing: -.01em; }
+  .top small { color: var(--text-muted); font-size: 13px; }
+  #host { position: relative; height: clamp(380px, 58vh, 560px); }
+  .meta { display: flex; justify-content: space-between; gap: 12px; padding: 10px 16px 0;
+    color: var(--text-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .meta b { color: var(--text); font-weight: 500; }
+  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 10px 16px 24px; }
+  .pair figure { margin: 0; }
+  .pair canvas { display: block; width: 100%; aspect-ratio: 1; border-radius: var(--radius-ctl);
+    background: #fff; box-shadow: 0 0 0 1px var(--border); }
+  .pair figcaption { margin-top: 6px; color: var(--text-muted); font-size: 12px; }
+  #check.ok { color: var(--ok); }
+  .open { margin: 0 16px; }
+</style>
+</head>
+<body>
+<header class="top"><span class="mark">Typist</span><small>Crop</small></header>
+<div id="host"></div>
+<div class="meta"><span id="vals"></span><span id="check"></span></div>
+<div class="pair">
+  <figure><canvas id="frameCopy" width="340" height="340"></canvas><figcaption>Frame (what you see)</figcaption></figure>
+  <figure><canvas id="art" width="340" height="340"></canvas><figcaption>Art · createConverter, 40 cols</figcaption></figure>
+</div>
+<div id="live" class="sr" aria-live="polite" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)"></div>
+<script type="module" src="./crop.js"></script>
+</body>
+</html>

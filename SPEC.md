@@ -184,3 +184,150 @@ font. Same dot geometry the film will use.
   390 px wide frame. `sheet=perf` — timings.
 - `dev/paste-test.html` — the real-device test kit (see its own header comment); `bake=1` writes a
   self-contained single-file copy to `shots/paste-test.html` for publishing.
+
+## Device finding (paste kit, 2026-09-23) — shapes the previews
+On Windows every app draws Braille with Segoe UI Symbol, where the blank U+2800 is 0.651 em but every
+dot pattern 0.753 em (measured in Chromium and Firefox: 9.76 px vs 11.30 px at 15 px). Rows shift
+left by 0.1 em per blank before their dots, so art on a white background shears in Telegram Desktop,
+X / Instagram in a Windows browser and the Claude desktop app. The payload is intact; phones use
+other Braille fonts (their widths come from the phone results). Telegram ASCII in a ``` fence is
+perfect on Windows (all fence tests passed, 28-84 columns). The U+2840 blank keeps alignment but shows
+a faint dot in every blank cell (the user marked that variant broken).
+Consequences: previews never draw Braille with the viewer's own font; they draw exact dots with the
+target device's cell metrics (js/raster.js geometry), and a "Windows" preview simulates the shear.
+
+## App (phase 3): phone-first, target-first
+
+The target (where the art is going) sets the style, width and dithering; tuning is secondary. The
+preview is a generic phone chat bubble at 1:1 CSS px, drawn with the TARGET DEVICE's cell metrics, so
+what fits here fits there. Every surface works at 360 px wide and in light and dark.
+
+### Look and feel (sibling of Spiralist)
+Spiralist's system, reused as is: warm desk `--desk #e7e3dc` / `#161514`, chrome `#faf9f6` / `#1f1e1c`,
+surfaces, borders, radii 8/10/16, shadows, `--ease`, the three-state theme pattern (bare `:root` light,
+`@media (prefers-color-scheme: dark) :root:not([data-theme="light"])`, `:root[data-theme="dark"]`).
+Type: Instrument Serif italic for the wordmark and the few headings, Geist for UI, **Geist Mono** for
+ASCII previews (Google Fonts link, like Spiralist, plus the service worker later). Typist's own accent
+is a typewriter-ribbon blue so the two sites read as siblings, not copies: `--accent #2448c8`,
+`--accent-soft rgba(36,72,200,.12)`, dark `--accent #8aa6ff`. Semantic colours, separate from the
+accent: fits `#17803d` / `#5bd083`, tight (amber) `#b26a00` / `#f0b35a`, over / wraps `#d11f1f` /
+`#ff7b70` (wrapped rows get a 14% band of it). Tabular numbers for every count.
+
+### Screens (390 x 844 phone; design for the ~660 px visible in Safari)
+1. **Welcome** (no photo yet, first visit): a bottom sheet over the stage, where a sample (the pet)
+   types itself in as Braille row by row (static with reduced motion). The sheet holds: heading
+   "Any photo. *In text.*", one line "Text art you can paste into a comment, a post or a chat.",
+   "Where will you paste it?" with 2 x 2 target tiles (Instagram comment · X post · Telegram · Telegram
+   channel; each shows its budget, e.g. "2,200 characters"; Instagram preselected) and a small "Just
+   save a file" link, then the primary "Choose a photo" (44 px), "Take a photo" (file input with
+   `capture`), the 4 sample thumbnails (img/samples/*-thumb.jpg), the privacy line "Runs in your
+   browser. Your photo is never uploaded." and "by @winchxyz". Drag and drop and paste work anywhere,
+   on every screen. `?for=ig|x|tg|tgc|file` preselects a target; the last target is remembered.
+2. **Editor** (the main screen), top to bottom:
+   - Top bar 48 px: wordmark "Typist" (serif italic), Undo, Redo, a ⋯ menu (New photo, Theme
+     Auto/Light/Dark, Share Typist on X, Star on GitHub, About).
+   - Target row 44 px, sideways-scrolling chips: Instagram · X · Telegram · Channel · File. Each chip
+     carries a 3 px fit bar (green fits, amber tight, red over or wraps) for the CURRENT art.
+   - Preview (the hero): the chat bubble at 1:1 with the art (see Preview). Top-left pills: Crop,
+     Compare (hold to see the photo). Top-right: the preview theme (sun / moon; defaults to the
+     device theme) and the device (iPhone · Android · Windows). When the art is dark on a dark
+     preview, an "Invert for dark mode" chip appears on the bubble.
+   - Fit meter 36 px: a 4 px bar and one line, e.g. `404 / 2,200 · 26 of 26 columns · Fits`; states
+     Fits / Tight ("may wrap with larger text") / Over ("61 over") / Wraps ("rows wrap on a 390 px
+     phone"). Auto-fit on target change says "Resized 40 → 26 wide · Undo" for 4 s.
+   - Tabs 44 px: **Look** · **Size** · **Tone**, panel below (scrolls with the page on phones).
+     - Look: 5 thumbnails of THEIR photo in the current target's size (Photo, Texture, Sketch, Soft,
+       Poster; js/tone.js LOOKS), then Style (Dots / Letters / Blocks) filtered by the target:
+       unavailable styles stay visible but disabled, and tapping one explains why ("Letters don't
+       line up on Instagram: it uses a proportional font. They do in Telegram."). More: Dithering
+       (Atkinson / Floyd–Steinberg / Ordered / Threshold) for Dots, Letters: Shape-aware / Density.
+     - Size: width stepper `− 26 columns +` with an "Auto" badge (on when it equals autoFit) and a
+       helper "Height follows the crop · 15 rows"; per target: X "Post · 280" / "Long post (Premium)",
+       Telegram "Phone" / "Desktop (72)", Channel "Text post" / "Photo caption · 1,024"; Blank cells:
+       "Clean" (U+2800, default) / "Windows-safe" (U+2840, faint dots) with one helper line about
+       Windows fonts.
+     - Tone: Invert for dark mode (switch + helper "Dark dots turn light on dark screens. Invert if
+       most people will see it in dark mode."), Brightness, Contrast; More: Gamma, Detail, Edges,
+       Auto levels (switch). Sliders: double-click / double-tap resets (Spiralist's sliderRow).
+   - Action bar (fixed bottom, safe-area padding): a secondary 44 px button and the primary button
+     filling the rest (48 px), label from the target: "Copy for Instagram", "Post on X" (≤ 280) /
+     "Copy for X" (long), "Copy for Telegram", "Copy for the channel", "Download". Secondary: "Share"
+     on Telegram targets (phones: Web Share; desktop: t.me link), "Copy" on X, "Film" otherwise
+     (Film is disabled with the tooltip "Coming soon" until phase 4).
+3. **Crop**: the photo replaces the preview with a square frame (outside dimmed); drag to pan, pinch
+   or wheel to zoom (logarithmic 0.5–6), two-finger rotate snapping to 0/±90/180 within 4°, Rotate 90°,
+   Fit, Cancel, Done. The art in the fit meter / chips updates live while dragging. Keyboard: arrows
+   pan, +/- zoom, R rotate, Enter done, Esc cancel.
+4. **Copied**: the primary button reads "Copied ✓" for 1.6 s, a toast says the one-line next step
+   (Instagram "Copied. Paste it into a comment."; X "Opened X. The art is on your clipboard too.";
+   X long "Copied. Paste it into a new post (Premium). The timeline shows N rows, then Show more.";
+   Telegram "Copied. Paste it into any chat and send."; File "Saved typist-….txt"). Instagram shows
+   once: "Pasting the same long comment again and again can get you an Action Blocked for a while."
+5. **Errors**: over budget → primary becomes "Fit to 2,200 (26 wide)" with a small "Copy anyway";
+   rows wrap → "Fit to phone (26 wide)" + "Copy anyway"; clipboard blocked → a sheet with the text
+   pre-selected in a read-only textarea, "Select all", "Download .txt", and the line "This browser
+   blocked copying. The art is selected: press and hold, then Copy."; pop-up blocked → toast with
+   "Open X" action.
+
+Desktop (≥ 1024 px): Spiralist's grid: top bar (wordmark, by @winchxyz, New photo, Star with the live
+count, Undo/Redo, the primary copy button), stage in the middle with the 390 px phone preview at 1:1
+(at ≥ 1280 px light and dark side by side), inspector 336 px on the right (target cards with their
+fit bars first, then Look, Size, Tone). Keys: C copy, 1–5 targets, [ ] width, I invert, F crop,
+\ compare (hold), Z/Shift+Z undo/redo.
+
+### Preview (js/preview.js)
+```js
+renderPreview(host, { target, payload /* formatFor result */, grid, device: 'ios'|'android'|'windows',
+                      theme: 'light'|'dark', phone: 390, opts }) -> { wrappedRows: number[], cellW, cellH }
+```
+Generic chrome only, with the platform's name as a text label, never logos: Instagram = a comment
+row (32 px avatar circle, "you", the art, "Reply"); X = a post card (40 px avatar, name and handle
+placeholders, the art, an action row of 4 generic icons); Telegram = an outgoing bubble (and a
+monospace pre block inside it for Letters); Channel = a channel post card with a view counter.
+The art is drawn on a canvas at devicePixelRatio: Braille as exact dots (js/raster.js
+brailleGeometry, dot colour = the platform's text colour for the theme), ASCII in Geist Mono, blocks as
+rectangles. Cell size = FIT fontPx x cellEm (width) and fontPx x lineEm (height) for the target and
+mode; for `device: 'windows'` Braille blank cells are 0.651/0.753 as wide as dot cells (the shear is
+shown honestly). Rows wider than the bubble wrap onto the next line exactly as the app would, with a
+red band and a row number in the gutter; X long shows a dashed "Show more" fold after `foldRow`;
+Instagram shows a "more" fold hint for tall comments. `aria-label` on the art: "Text art of your
+photo, 26 by 15 characters, for an Instagram comment" (screen readers must not read U+2800 aloud).
+
+### Copy (js/copy.js) and files (js/export.js)
+```js
+copyFor(target, payload, { event, device }) -> Promise<{ how: 'clipboard'|'intent'|'share'|'manual', hint }>
+copyText(text, html = null)          // ClipboardItem built synchronously in the gesture (Safari);
+                                     // text/html only for Telegram ASCII on a fine pointer; fallbacks:
+                                     // writeText -> execCommand('copy') -> 'manual'
+openXIntent(text)                    // x.com/intent/tweet (links.js), clipboard first, same gesture
+shareTelegram(payload)               // phones: navigator.share({text}); desktop: t.me/share/url when
+                                     // linkFits(), else clipboard
+exportTxt(payload) · exportPNG(grid, {scale, ink, paper, transparent}) · exportSVG(grid, {ink, paper})
+· exportHTML(grid, {ink, paper, colour}) · downloadBlob(blob, name) · fileName(parts, ext)
+```
+PNG / SVG / HTML draw the Grid (dots, glyphs in Geist Mono or a monospace stack, colour blocks with
+fg/bg), not the photo. File names `typist-<target>-<cols>x<rows>.<ext>`.
+
+### State and storage
+`js/app.js` owns one state object `{ target, targetOpts: {x: 'post'|'long', tg: 'phone'|'desktop',
+tgc: 'post'|'caption'}, mode, look, dither, ascii, cols (null = auto), blank: 'u2800'|'dot', tone,
+crop, device, previewTheme }`, persisted with js/store.js (settings; the last photo in IndexedDB
+so a reload keeps working) and undoable with js/history.js (one step per gesture). Test hooks:
+`window.TY = { state, grid, payload, ready }` and `window.__done` once the first art is drawn.
+
+### Download PNG for every art (user request, 2026-09-23 — MUST)
+Every artwork can be saved as a PNG from every target, not only from File:
+- The action bar always has a **PNG** button (download icon + "PNG", 44 px) next to the secondary
+  button, on every target, on phones and desktop (desktop: in the top bar next to the copy button
+  too). Keyboard: S. The File target additionally lists .txt, PNG, SVG and HTML.
+- The PNG is exactly the art being copied: the same Grid and the same blank option, drawn with
+  js/raster.js (Braille as dots, ASCII in Geist Mono, colour blocks with their colours) on paper,
+  with a small margin. Theme follows invert: dark dots on white when not inverted, light dots on
+  near-black when inverted. Scale: 2x the phone preview metrics by default (crisp on phones),
+  with a "Large (4x)" choice in a small menu on long-press / the chevron.
+- File name `typist-<target>-<cols>x<rows>.png`. On phones, when `navigator.canShare({files})`
+  holds, hand the file to the share sheet (so it can go straight to Photos / Instagram), else
+  download; toast "Saved typist-ig-26x15.png".
+- Also offer PNG from each Look thumbnail's long-press / context menu (downloads that look's art).
+- e2e: the download event fires with a valid PNG (check the signature and the pixel size) for every
+  target and mode.

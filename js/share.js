@@ -1,48 +1,46 @@
-// Sharing to X and credits.
+// Sharing Typist itself (the ⋯ menu) and credits.
 //
-// X's web intent cannot carry a file, so on desktop we save the file and open a pre-filled post
-// for the user to attach it to. On phones the system share sheet sends the file itself (the user
-// picks X), which is the only way to post a video in one step.
+// X's web intent cannot carry a file, so on desktop a film is saved and a pre-filled post opened for
+// the user to attach it to. On phones the system share sheet sends the file itself (the user picks
+// X), which is the only way to post a video in one step. The art's own "Post on X" lives in
+// copy.js: it carries the art as text, this module only links to the site.
 
 export const SITE_URL = 'https://winchxyz.github.io/typist/';
 export const REPO_URL = 'https://github.com/winchxyz/typist';
 export const AUTHOR = { handle: 'winchxyz', url: 'https://x.com/winchxyz' };
 
-export function xIntentUrl(text, url = SITE_URL) {
+export function siteIntentUrl(text, url = SITE_URL) {
   const q = new URLSearchParams({ text, url });
   return `https://x.com/intent/post?${q}`;
 }
 
 export const shareText = kind => (kind === 'video'
-  ? `Watch my photo turn into one continuous line. Made with Spiralist by @${AUTHOR.handle}`
-  : `My photo, redrawn as one continuous line. Made with Spiralist by @${AUTHOR.handle}`);
+  ? `Watch my photo turn into text art. Made with Typist by @${AUTHOR.handle}`
+  : `Turn any photo into text art you can paste into a comment, a post or a chat. Typist by @${AUTHOR.handle}`);
 
 /**
- * Open X's composer in a new tab. Returns false when the browser blocked the popup.
- * Not `window.open(url, '_blank', 'noopener')`: with 'noopener' the call returns null by spec, so a
- * blocked popup and an opened one look the same. The opener link is cut by hand instead.
+ * Open X's composer with a link to Typist in a new tab. Returns false when the browser blocked the
+ * popup. Not `window.open(url, '_blank', 'noopener')`: with 'noopener' the call returns null by
+ * spec, so a blocked popup and an opened one look the same. The opener link is cut by hand instead.
  */
-export function openXIntent(kind) {
-  const tab = window.open(xIntentUrl(shareText(kind)), '_blank');
+export function shareSiteOnX(kind = 'site') {
+  const tab = window.open(siteIntentUrl(shareText(kind)), '_blank');
   if (!tab) return false;
   try { tab.opener = null; } catch { /* already detached */ }
   return true;
 }
 
 /**
- * Share a file to X. Must be called from a click handler: the new tab is opened synchronously so
- * popup blockers allow it, before the (possibly slow) file is ready. Never navigates this page:
- * the user's drawing or film would be lost.
+ * Share a file (the film, phase 4) to X. Must be called from a click handler: the new tab is opened
+ * synchronously so popup blockers allow it, before the (possibly slow) file is ready.
  * @param getBlob  () => Promise<Blob> | Blob
- * @param opts     { filename, kind: 'image'|'video', download(blob, name), canShare(type) }
+ * @param opts     { filename, kind: 'image'|'video', download(blob, name), canShare(type), mime }
  * @returns 'shared' | 'cancelled' | 'intent' (X tab open, file saved) | 'blocked' (popup blocked,
- *          file saved: offer openXIntent from a later click) | 'saved' (share sheet failed, file saved)
+ *          file saved) | 'saved' (share sheet failed, file saved)
  */
 export async function shareToX(getBlob, { filename, kind, download, canShare, mime }) {
   const text = shareText(kind);
-  const nativeFiles = canShare?.(mime);
-  if (nativeFiles) {
-    // Phones: hand the actual file to the share sheet (X accepts images and videos from it).
+  if (canShare?.(mime)) {
     let blob = null;
     try {
       blob = await getBlob();
@@ -51,13 +49,13 @@ export async function shareToX(getBlob, { filename, kind, download, canShare, mi
       return 'shared';
     } catch (e) {
       if (e && e.name === 'AbortError') return 'cancelled';
-      // The click's user activation is spent by now, so a new tab would be blocked: save the
-      // file and let the caller offer X from a fresh tap.
+      // the click's user activation is spent by now, so a new tab would be blocked: save the file
+      // and let the caller offer X from a fresh tap
       download(blob || await getBlob(), filename);
       return 'saved';
     }
   }
-  const opened = openXIntent(kind);
+  const opened = shareSiteOnX(kind);
   download(await getBlob(), filename);
   return opened ? 'intent' : 'blocked';
 }
