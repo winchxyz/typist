@@ -1,12 +1,21 @@
-// Visual check for js/ascii.js: fixtures + a synthetic test card, shape vs ramp, drawn in the font
-// the glyph vectors were made from, saved as shots/ascii_*.png. The lightness grid here is a plain
-// grayscale resample with 1% / 99% levels (the real converter tones it; this page only needs a
-// representative input).
+// Visual check for js/ascii.js: the Hopper photo, the four samples and a synthetic test card at 32
+// and 60 columns, drawn with raster.js drawGrid in the font the glyph vectors were made from.
+// Saves shots/<tag>_<cols>.png (overview) and shots/<tag>_<id>_<cols>.png (one source, big).
+// The lightness grid is a plain grayscale resample with 1% / 99% levels (the converter tones it
+// later; this page only needs a representative input).
+// tone=1 feeds the converter's own tone.js toneGrid (auto levels, detail, midtones solved for the
+// ASCII ink target) instead, which is what the app will show.
+// Query: tag=ascii2, contrast=1, ramp=1 (add the ramp method column), tone=1, save=0, only=hopper,card.
 import { asciiCells, ASCII_SUB, CELL_ASPECT, SHAPES_CURRENT } from '../js/ascii.js';
 import { FONT } from '../js/shape-vectors.js';
+import { drawGrid } from '../js/raster.js';
+import { toneGrid } from '../js/tone.js';
 
 const q = new URLSearchParams(location.search);
 const contrast = q.has('contrast') ? +q.get('contrast') : 1;
+const TAG = q.get('tag') || 'ascii2';
+const WITH_RAMP = q.get('ramp') === '1';
+const TONED = q.get('tone') === '1';
 const FAMILY = (FONT && FONT.family) || 'monospace';
 const [SX, SY] = ASCII_SUB;
 const PAPER = '#fbfaf6', INK = '#17171a';
@@ -23,15 +32,19 @@ function testCard(size = 720) {
   g.fillStyle = '#fff'; g.fillRect(0, 0, size, size);
   g.strokeStyle = '#000'; g.fillStyle = '#000'; g.lineCap = 'butt';
   const u = size / 100;
-  g.lineWidth = 0.4 * u;   // about one glyph stroke at 32-60 columns
+  g.lineWidth = 0.6 * u;   // about one glyph stroke at 32-60 columns
   g.beginPath(); g.arc(50 * u, 50 * u, 30 * u, 0, Math.PI * 2); g.stroke();       // circle outline
   g.beginPath(); g.moveTo(4 * u, 96 * u); g.lineTo(34 * u, 66 * u); g.stroke();  // 45 deg '/'
   g.beginPath(); g.moveTo(66 * u, 66 * u); g.lineTo(96 * u, 96 * u); g.stroke(); // 45 deg '\'
   g.beginPath(); g.moveTo(8 * u, 4 * u); g.lineTo(8 * u, 40 * u); g.stroke();    // vertical '|'
   g.beginPath(); g.moveTo(60 * u, 10 * u); g.lineTo(96 * u, 10 * u); g.stroke(); // horizontal
-  g.beginPath(); g.moveTo(60 * u, 26 * u); g.lineTo(96 * u, 26 * u); g.stroke();
+  g.lineWidth = 2 * u;
+  g.beginPath(); g.moveTo(60 * u, 26 * u); g.lineTo(96 * u, 26 * u); g.stroke(); // thick horizontal
+  g.lineWidth = 0.6 * u;
   g.beginPath(); g.moveTo(16 * u, 4 * u); g.lineTo(34 * u, 40 * u); g.stroke();  // steep diagonal
   g.beginPath(); g.arc(50 * u, 50 * u, 9 * u, 0, Math.PI * 2); g.fill();         // filled disc
+  g.fillStyle = '#e4e4e4'; g.fillRect(62 * u, 34 * u, 34 * u, 10 * u);            // light grey patch
+  g.fillStyle = '#000';
   g.font = `bold ${15 * u}px Arial, sans-serif`; g.textAlign = 'center';
   g.fillText('ASCII', 50 * u, 88 * u);                                            // text-like shapes
   const grad = g.createLinearGradient(40 * u, 0, 96 * u, 0);
@@ -41,7 +54,7 @@ function testCard(size = 720) {
 }
 
 // Square centre crop -> W x H lightness (sample pixels are not square: the crop maps onto the
-// cols x rows cell grid, as the real sampler does).
+// cols x rows cell grid, as the real sampler does), composited over white, 1 / 99 % levels.
 function lightness(src, cols, rows) {
   const W = cols * SX, H = rows * SY;
   const c = document.createElement('canvas');
@@ -54,6 +67,7 @@ function lightness(src, cols, rows) {
   const d = g.getImageData(0, 0, W, H).data;
   const L = new Float32Array(W * H);
   for (let i = 0; i < L.length; i++) L[i] = (0.2126 * d[i * 4] + 0.7152 * d[i * 4 + 1] + 0.0722 * d[i * 4 + 2]) / 255;
+  if (TONED) return { L: toneGrid({ W, H, L }, {}, { target: 0.4 }), W, H };
   const s = Float32Array.from(L).sort();
   const lo = s[Math.floor(s.length * 0.01)], hi = s[Math.floor(s.length * 0.99)];
   const span = Math.max(0.05, hi - lo);
@@ -65,16 +79,6 @@ function toLines(cp, cols, rows) {
   const out = [];
   for (let r = 0; r < rows; r++) out.push(String.fromCodePoint(...cp.subarray(r * cols, (r + 1) * cols)));
   return out;
-}
-
-function drawText(g, lines, x, y, cellW) {
-  const size = cellW / FONT.advanceEm, lineH = cellW / CELL_ASPECT;
-  const base = (lineH - (FONT.ascentEm + FONT.descentEm) * size) / 2 + FONT.ascentEm * size;
-  g.font = `${size}px "${FAMILY}"`;
-  g.fillStyle = INK; g.textBaseline = 'alphabetic'; g.textAlign = 'left';
-  lines.forEach((line, r) => {
-    for (let i = 0; i < line.length; i++) g.fillText(line[i], x + i * cellW, y + r * lineH + base);
-  });
 }
 
 function drawGray(g, L, W, H, x, y, w, h) {
@@ -97,64 +101,82 @@ async function save(name, canvas) {
   return (await r.json()).file;
 }
 
-// One sheet: a row per source, [gray input | shape | ramp].
-async function sheet(name, sources, cols, cellW) {
+// One block per source: [gray input | shape (| ramp)].
+function block(src, id, cols, cellW) {
   const rows = Math.max(1, Math.round(cols * CELL_ASPECT));
-  const artW = cols * cellW, artH = rows * cellW / CELL_ASPECT;
-  const PAD = 16, LABEL = 22;
+  const cellH = cellW / CELL_ASPECT;
+  const artW = cols * cellW, artH = rows * cellH;
+  const PAD = 12, LABEL = 20;
+  const methods = WITH_RAMP ? ['shape', 'ramp'] : ['shape'];
   const canvas = document.createElement('canvas');
-  canvas.width = PAD + (artH + PAD) + 2 * (artW + PAD);
-  canvas.height = PAD + sources.length * (artH + LABEL + PAD);
+  canvas.width = Math.ceil(artH + PAD + methods.length * (artW + PAD));
+  canvas.height = Math.ceil(artH + LABEL);
   const g = canvas.getContext('2d');
   g.fillStyle = PAPER; g.fillRect(0, 0, canvas.width, canvas.height);
-  const report = {};
-  sources.forEach(({ id, src }, i) => {
-    const y = PAD + i * (artH + LABEL + PAD) + LABEL;
-    const { L, W, H } = lightness(src, cols, rows);
-    drawGray(g, L, W, H, PAD, y, artH, artH);
-    const res = {};
-    ['shape', 'ramp'].forEach((method, m) => {
-      const t0 = performance.now();
-      const cp = asciiCells(L, W, H, cols, rows, { method, contrast });
-      const ms = performance.now() - t0;
-      const lines = toLines(cp, cols, rows);
-      const x = PAD + artH + PAD + m * (artW + PAD);
-      g.fillStyle = '#fff'; g.fillRect(x, y, artW, artH);
-      drawText(g, lines, x, y, cellW);
-      g.fillStyle = '#6b6a66'; g.font = '13px system-ui';
-      g.fillText(`${id}  ${method}  ${cols} x ${rows}  ${ms.toFixed(1)} ms`, x, y - 6);
-      res[method] = { ms: +ms.toFixed(2), lines };
-    });
+  const { L, W, H } = lightness(src, cols, rows);
+  drawGray(g, L, W, H, 0, LABEL, artH, artH);
+  g.fillStyle = '#6b6a66'; g.font = '13px system-ui';
+  g.fillText(`${id} input`, 0, LABEL - 6);
+  const res = {};
+  methods.forEach((method, m) => {
+    const t0 = performance.now();
+    const cp = asciiCells(L, W, H, cols, rows, { method, contrast });
+    const ms = performance.now() - t0;
+    const x = artH + PAD + m * (artW + PAD);
+    drawGrid(g, { mode: 'ascii', cols, rows, cp }, { x, y: LABEL, cellW, cellH, ink: INK, paper: '#fff', font: `"${FAMILY}"` });
     g.fillStyle = '#6b6a66'; g.font = '13px system-ui';
-    g.fillText(`${id} input`, PAD, y - 6);
-    report[id] = res;
+    g.fillText(`${id}  ${method}  ${cols} x ${rows}  ${ms.toFixed(1)} ms`, x, LABEL - 6);
+    res[method] = { ms: +ms.toFixed(2), lines: toLines(cp, cols, rows) };
   });
+  return { canvas, res };
+}
+
+// Overview: blocks in a grid of `per` columns.
+async function sheet(name, blocks, per) {
+  const PAD = 16;
+  const bw = Math.max(...blocks.map(b => b.canvas.width)), bh = Math.max(...blocks.map(b => b.canvas.height));
+  const nr = Math.ceil(blocks.length / per);
+  const canvas = document.createElement('canvas');
+  canvas.width = PAD + per * (bw + PAD);
+  canvas.height = PAD + nr * (bh + PAD);
+  const g = canvas.getContext('2d');
+  g.fillStyle = PAPER; g.fillRect(0, 0, canvas.width, canvas.height);
+  blocks.forEach((b, i) => g.drawImage(b.canvas, PAD + (i % per) * (bw + PAD), PAD + Math.floor(i / per) * (bh + PAD)));
   document.getElementById('out').appendChild(canvas);
-  return { file: await save(name, canvas), report };
+  return save(name, canvas);
 }
 
 try {
   await document.fonts.load(`16px "${FAMILY}"`);
-  const fx = ['portrait_exif6.jpg', 'logo_alpha.png', 'dark.jpg'];
+  const list = [
+    ['hopper', '/tests/fixtures/photo_hopper.jpg'],
+    ['portrait', '/img/samples/portrait.jpg'],
+    ['pet', '/img/samples/pet.jpg'],
+    ['landmark', '/img/samples/landmark.jpg'],
+    ['logo', '/img/samples/logo.jpg'],
+  ];
+  const only = q.get('only') ? q.get('only').split(',') : null;
   const sources = [];
-  for (const f of fx) sources.push({ id: f.replace(/\..*/, ''), src: await loadBitmap('/tests/fixtures/' + f) });
-  sources.push({ id: 'card', src: testCard() });
+  for (const [id, url] of list) if (!only || only.includes(id)) sources.push({ id, src: await loadBitmap(url) });
+  if (!only || only.includes('card')) sources.push({ id: 'card', src: testCard() });
   // Warm up (JIT) so the timings below are steady-state.
   for (let i = 0; i < 5; i++) {
     const { L, W, H } = lightness(sources[0].src, 60, 28);
     asciiCells(L, W, H, 60, 28, { method: 'shape' });
   }
-  const s32 = await sheet('ascii_32', sources, 32, 12);
-  const s60 = await sheet('ascii_60', sources, 60, 9);
-  const card = await sheet('ascii_card', [sources[3]], 90, 8);
-  const pick = (s, id) => s.report[id].shape.lines;
-  window.__done = {
-    ok: true, font: FAMILY, shapesCurrent: SHAPES_CURRENT, contrast,
-    files: [s32.file, s60.file, card.file],
-    ms: Object.fromEntries(Object.entries(s60.report).map(([k, v]) => [k, v.shape.ms])),
-    portrait32: pick(s32, 'portrait_exif6'),
-    card60: pick(s60, 'card'),
-  };
+  const files = [], text = {}, ms = {};
+  for (const [cols, cellW, per] of [[32, 12, 2], [60, 9, 2]]) {
+    const blocks = [];
+    for (const { id, src } of sources) {
+      const b = block(src, id, cols, cellW);
+      blocks.push(b);
+      text[`${id}${cols}`] = b.res.shape.lines;
+      ms[`${id}${cols}`] = b.res.shape.ms;
+      files.push(await save(`${TAG}_${id}_${cols}`, b.canvas));
+    }
+    files.push(await sheet(`${TAG}_${cols}`, blocks, per));
+  }
+  window.__done = { ok: true, font: FAMILY, shapesCurrent: SHAPES_CURRENT, contrast, files, ms, text };
 } catch (e) {
   window.__done = { ok: false, error: String(e && e.stack || e) };
 }

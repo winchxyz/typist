@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Typist variant: line</title>
+<style>
+  body { margin: 16px; background: #eceae4; color: #17171a; font: 13px/1.4 system-ui, sans-serif; }
+  canvas { display: block; max-width: 100%; }
+  pre { font-size: 11px; }
+</style>
+</head>
+<body>
+<!-- Variant "line" (XDoG ink lines + a light dithered tone) contact sheet:
+       node tests/shoot.mjs "/dev/var-line.html"                 -> shots/var_line.png
+       node tests/shoot.mjs "/dev/var-line.html?v=baseline"      -> shots/var_line_baseline.png
+     Query: name=<shot name>, dbg=1 (adds the line layer alone at 28 x 15), and any LINE_DEFAULTS
+     key as an override, e.g. eps=0.2;p=20;toneTarget=0.18. -->
+<div id="out"></div>
+<pre id="log"></pre>
+<script type="module" src="./var-line.js"></script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Typist tone variant: detail</title>
+<style>
+  body { margin: 16px; background: #eceae4; color: #17171a; font: 13px/1.4 system-ui, sans-serif; }
+  canvas { display: block; margin: 0 0 24px; max-width: 100%; }
+</style>
+</head>
+<body>
+<!-- Variant "detail" contact sheets (local tone mapping vs the current toneGrid baseline):
+       node tests/shoot.mjs "/dev/var-detail.html"          -> shots/var_detail.png + shots/var_detail_baseline.png
+       node tests/shoot.mjs "/dev/var-detail.html?debug=1;p=gain:2.2,eps:0.03;tag=_try" -->
+<script type="module" src="./var-detail.js"></script>
+</body>
+</html>

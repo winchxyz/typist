@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Typist variant: local contrast</title>
+<style>
+  body { margin: 16px; background: #eceae4; color: #17171a; font: 13px/1.4 system-ui, sans-serif; }
+  canvas { display: block; margin: 0 0 24px; max-width: 100%; }
+  pre { font-size: 11px; }
+</style>
+</head>
+<body>
+<!-- Variant "local" (CLAHE + subject-weighted ink target) vs the current toneGrid, as two contact
+     sheets with the same layout:
+       node tests/shoot.mjs "/dev/var-local.html"            -> shots/var_local.png + var_local_baseline.png
+     Query: any LOCAL_DEFAULTS key (tiles, clip, amount, sharpen, salient, target, bins) overrides it;
+     tag=_x appends to the shot names; base=0 skips the baseline sheet; save=0 saves nothing. -->
+<div id="out"></div>
+<pre id="log"></pre>
+<script type="module" src="./var-local.js"></script>
+</body>
+</html>

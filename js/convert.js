@@ -2,7 +2,7 @@
 // affects: the sample depends on crop + grid size + colour, the tone on the sample + tone controls,
 // and the encode (dither / glyph match / block fit) runs on top of the cached tone.
 
-import { sampleImage, toneGrid, TONE_DEFAULTS, CROP_DEFAULTS } from './tone.js';
+import { sampleImage, decodeSource, toneGrid, TONE_DEFAULTS, CROP_DEFAULTS } from './tone.js';
 import { ditherDots, encodeBraille, DITHERS } from './dither.js';
 import { labGrid, blocksHalf, blocksQuad, blocksMono } from './blocks.js';
 
@@ -32,6 +32,12 @@ export function smallGridBoost(cols) {
   return Math.max(0, Math.min(1, (36 - cols) / 20));
 }
 
+// ASCII: the glyph matcher reads an SX x SY raster per cell (8 x 17): 228k samples at 60 x 28, and
+// toning that many dominated a fresh crop (~400 ms at 4x CPU throttling). The photo is sampled and
+// toned at most ASCII_SAMPLE per cell (4x fewer) and asciiCells area-resamples that to its raster,
+// so each sub-circle still integrates the photo (every coarse sample is an area average itself).
+export const ASCII_SAMPLE = [4, 8];
+
 /** Sample grid size and encoder for a set of options. */
 export function sampleSize(o) {
   const { mode, cols, rows } = o;
@@ -40,7 +46,7 @@ export function sampleSize(o) {
   if (mode === 'ascii') {
     if (!ascii) throw new Error('ASCII mode unavailable: ' + (asciiError ? asciiError.message : 'ascii.js not loaded'));
     const [SX, SY] = ascii.ASCII_SUB;
-    return [cols * SX, rows * SY];
+    return [cols * Math.min(SX, ASCII_SAMPLE[0]), rows * Math.min(SY, ASCII_SAMPLE[1])];
   }
   throw new Error('unknown mode ' + mode);
 }
@@ -71,11 +77,14 @@ class LRU {
 }
 
 export function createConverter() {
+  // the photo decoded once (RGBA, long side <= 1024): every crop resamples it in plain JS, so a
+  // fresh crop is cheap and gives the same samples in every engine
   let source = null;
   // a few entries each, so flipping between modes or grid sizes does not redo the work
   const samples = new LRU(6);
   const tones = new LRU(8);
   const stats = { samples: 0, tones: 0, encodes: 0 };
+  let decodeMs = 0;
 
   function run(crop, opts = {}) {
     if (!source) throw new Error('converter: no source');
@@ -142,7 +151,15 @@ export function createConverter() {
   return {
     stats,
     get asciiReady() { return !!ascii; },
-    setSource(s) { source = s; samples.clear(); tones.clear(); },
+    setSource(s) {
+      samples.clear(); tones.clear();
+      const t0 = typeof performance !== 'undefined' ? performance.now() : 0;
+      source = s ? decodeSource(s) : null;
+      decodeMs = typeof performance !== 'undefined' ? performance.now() - t0 : 0;
+    },
+    /** The decoded working buffer { width, height, data } (null before setSource). */
+    get decoded() { return source; },
+    get decodeMs() { return decodeMs; },
     run,
   };
 }

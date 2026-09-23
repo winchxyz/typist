@@ -1,7 +1,8 @@
 // Tone pipeline (adapted from Spiralist): photo -> W x H lightness grid -> toned lightness.
 //
-//   sampleImage(source, crop, W, H)   DOM: canvas resample of the square crop, over white
-//   sampleFromRGBA(rgba, w, h, W, H)  pure twin of the same resample (node tests, ImageData sources)
+//   decodeSource(source)              once per photo: straight RGBA, long side <= DECODE_MAX
+//   sampleImage(source, crop, W, H)   pure JS resample of the square crop, over white (any engine)
+//   sampleFromRGBA(rgba, w, h, W, H)  the same resample of raw bytes at their own size (node tests)
 //   toneGrid(img, tone)               pure: levels, detail, contrast, brightness, gamma, invert, edges
 //
 // Polarity: L in [0, 1], 1 = white paper, 0 = black. Ink = 1 - L. `invert` flips L at the end, so
@@ -33,74 +34,261 @@ export function cropSide(width, height, crop) {
   return Math.min(width, height) / Math.max(0.05, (crop && crop.zoom) || 1);
 }
 
-// Supersampling per axis: enough to average the source footprint of one sample, capped so the
-// work stays small (the canvas already filters large reductions).
-function superFactor(side, W, H) {
-  const s = Math.ceil(side / Math.max(1, Math.min(W, H)));
-  return Math.max(1, Math.min(4, s));
+// ---------------------------------------------------------------------------------- sampling
+// The photo is decoded ONCE (decodeSource) into straight RGBA at most DECODE_MAX px on its long
+// side, drawn at native size so no engine resamples it. Every crop, rotation and resample after
+// that is plain JS over summed-area tables: O(1) per sample whatever the zoom, and the same numbers
+// in every engine. (Resampling each crop through a canvas cost up to a 1440 x 1428 readback, slowed
+// every later canvas in Chromium and WebKit, and differed between engines by enough for the
+// dithers to flip a third of the cells.)
+
+/** Long side of the decoded working buffer (px). */
+export const DECODE_MAX = 1024;
+// Above this many pixels the canvas shrinks the photo first (the app's intake caps at 2048 px, so
+// only huge direct sources hit this; their result then depends on the engine's resampler).
+const READ_MAX_PX = 4096 * 4096;
+
+/** A decoded photo: straight RGBA bytes plus lazily built summed-area tables. */
+export class DecodedImage {
+  constructor(width, height, data) {
+    this.width = width;
+    this.height = height;
+    this.data = data;
+    let opaque = true;
+    for (let p = 3; p < data.length; p += 4) if (data[p] !== 255) { opaque = false; break; }
+    this.opaque = opaque;
+    this.sat = null;      // { Y, A } premultiplied luma (+ alpha when not opaque)
+    this.satRGB = null;   // [R, G, B] premultiplied, only for colour blocks
+  }
 }
 
-let scratch = null;   // reused canvas: allocation dominates small resamples otherwise
-function scratchCtx(w, h) {
-  if (!scratch) {
-    scratch = typeof OffscreenCanvas !== 'undefined'
-      ? new OffscreenCanvas(w, h)
-      : Object.assign(document.createElement('canvas'), { width: w, height: h });
+const isPixels = s => !!(s && s.data && typeof s.getContext !== 'function' && s.width > 0 && s.height > 0);
+
+/**
+ * Decode any source once: DecodedImage (returned as is), ImageData-like { width, height, data },
+ * or a drawable (ImageBitmap, canvas, img). Larger than maxSide: area-averaged down in JS.
+ */
+export function decodeSource(source, maxSide = DECODE_MAX) {
+  if (source instanceof DecodedImage) return source;
+  if (isPixels(source)) return fromRGBA(source.data, source.width, source.height, maxSide);
+  // An ImageBitmap or img cannot change, so its decode (and summed-area tables) is shared by every
+  // converter and lab call given the same object; a canvas can be redrawn, so it is read each time.
+  const keep = typeof source.getContext !== 'function' && maxSide === DECODE_MAX;
+  const hit = keep && decodeCache.get(source);
+  if (hit) return hit;
+  const dec = readDrawable(source, maxSide);
+  if (keep) decodeCache.set(source, dec);
+  return dec;
+}
+const decodeCache = new WeakMap();
+
+function readDrawable(source, maxSide) {
+  const w = source.naturalWidth || source.videoWidth || source.width;
+  const h = source.naturalHeight || source.videoHeight || source.height;
+  if (!(w > 0 && h > 0)) throw new Error('decodeSource: empty image');
+  let dw = w, dh = h;
+  if (w * h > READ_MAX_PX) {
+    const k = Math.sqrt(READ_MAX_PX / (w * h));
+    dw = Math.max(1, Math.floor(w * k)); dh = Math.max(1, Math.floor(h * k));
   }
-  if (scratch.width !== w || scratch.height !== h) { scratch.width = w; scratch.height = h; }
-  return scratch.getContext('2d', { willReadFrequently: true });
+  const cv = typeof OffscreenCanvas !== 'undefined'
+    ? new OffscreenCanvas(dw, dh)
+    : Object.assign(document.createElement('canvas'), { width: dw, height: dh });
+  const ctx = cv.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(source, 0, 0, dw, dh);
+  const data = ctx.getImageData(0, 0, dw, dh).data;
+  cv.width = cv.height = 1;   // Safari keeps canvas memory until GC otherwise
+  return fromRGBA(data, dw, dh, maxSide);
+}
+
+function fromRGBA(data, w, h, maxSide) {
+  const s = maxSide / Math.max(w, h);
+  if (s >= 1) return new DecodedImage(w, h, data);
+  const tw = Math.max(1, Math.round(w * s)), th = Math.max(1, Math.round(h * s));
+  return new DecodedImage(tw, th, areaDown(data, w, h, tw, th));
+}
+
+// Fractional box spans of n source cells onto n2 (<= n) output cells, flattened.
+function spans(n, n2) {
+  const s = n / n2, start = new Int32Array(n2 + 1), idx = [], wt = [];
+  for (let o = 0; o < n2; o++) {
+    start[o] = idx.length;
+    const a = o * s, b = Math.min(n, (o + 1) * s);
+    for (let i = Math.floor(a); i < b && i < n; i++) {
+      const w = Math.min(b, i + 1) - Math.max(a, i);
+      if (w > 1e-12) { idx.push(i); wt.push(w); }
+    }
+  }
+  start[n2] = idx.length;
+  return { start, idx: Int32Array.from(idx), wt: Float64Array.from(wt) };
+}
+
+/** Area-average downscale of straight RGBA (alpha-weighted colour), one source row at a time. */
+function areaDown(d, w, h, tw, th) {
+  const out = new Uint8ClampedArray(tw * th * 4);
+  const X = spans(w, tw), sy = h / th, inv = 1 / ((w / tw) * sy);
+  const row = new Float64Array(tw * 4), acc = new Float64Array(tw * 4);
+  const flush = oy => {
+    for (let x = 0, q = oy * tw * 4; x < tw; x++, q += 4) {
+      const k = x * 4, a = acc[k + 3];
+      if (a > 0) { out[q] = acc[k] / a; out[q + 1] = acc[k + 1] / a; out[q + 2] = acc[k + 2] / a; }
+      out[q + 3] = a * inv;
+    }
+    acc.fill(0);
+  };
+  let oy = 0, end = sy;
+  for (let y = 0; y < h && oy < th; y++) {
+    const base = y * w * 4;
+    for (let x = 0; x < tw; x++) {
+      let r = 0, g = 0, b = 0, a = 0;
+      for (let t = X.start[x]; t < X.start[x + 1]; t++) {
+        const p = base + X.idx[t] * 4, wa = X.wt[t] * d[p + 3];
+        r += d[p] * wa; g += d[p + 1] * wa; b += d[p + 2] * wa; a += wa;
+      }
+      row[x * 4] = r; row[x * 4 + 1] = g; row[x * 4 + 2] = b; row[x * 4 + 3] = a;
+    }
+    // source row [y, y + 1) splits between output row oy and, past `end`, row oy + 1
+    const last = y === h - 1;
+    const wIn = last ? 1 : Math.min(y + 1, end) - y;
+    for (let k = 0; k < acc.length; k++) acc[k] += row[k] * wIn;
+    if (last || y + 1 >= end - 1e-9) {
+      flush(oy++);
+      end = (oy + 1) * sy;
+      const spill = y + 1 - (end - sy);
+      if (!last && spill > 1e-9 && oy < th) for (let k = 0; k < acc.length; k++) acc[k] += row[k] * spill;
+    }
+  }
+  while (oy < th) flush(oy++);
+  return out;
+}
+
+// Summed-area tables hold integers (value x 16), so sums are exact and engine-independent;
+// Uint32 fits up to 1024 x 1024 px of white, larger buffers fall back to Float64.
+const SAT_SCALE = 16;
+function satArray(n) { return (n + 1) * 4080 < 4294967295 ? Uint32Array : Float64Array; }
+
+function buildSat(dec) {
+  const { width: w, height: h, data: d } = dec, W1 = w + 1;
+  const T = satArray(w * h);
+  const Y = new T(W1 * (h + 1)), A = dec.opaque ? null : new T(W1 * (h + 1));
+  for (let y = 0; y < h; y++) {
+    let ry = 0, ra = 0;
+    const o = (y + 1) * W1, u = y * W1;
+    for (let x = 0, p = y * w * 4; x < w; x++, p += 4) {
+      const a = d[p + 3];
+      // premultiplied Rec. 709 luma of the encoded values, x 16, rounded: exact integer sums
+      ry += Math.round((0.2126 * d[p] + 0.7152 * d[p + 1] + 0.0722 * d[p + 2]) * a * (SAT_SCALE / 255));
+      Y[o + x + 1] = Y[u + x + 1] + ry;
+      if (A) { ra += a * SAT_SCALE; A[o + x + 1] = A[u + x + 1] + ra; }
+    }
+  }
+  return (dec.sat = { Y, A });
+}
+
+function buildSatRGB(dec) {
+  const { width: w, height: h, data: d } = dec, W1 = w + 1;
+  const T = satArray(w * h);
+  const S = [new T(W1 * (h + 1)), new T(W1 * (h + 1)), new T(W1 * (h + 1))];
+  const run = [0, 0, 0];
+  for (let y = 0; y < h; y++) {
+    run[0] = run[1] = run[2] = 0;
+    const o = (y + 1) * W1, u = y * W1;
+    for (let x = 0, p = y * w * 4; x < w; x++, p += 4) {
+      const k = d[p + 3] * (SAT_SCALE / 255);
+      for (let c = 0; c < 3; c++) {
+        run[c] += Math.round(d[p + c] * k);
+        S[c][o + x + 1] = S[c][u + x + 1] + run[c];
+      }
+    }
+  }
+  return (dec.satRGB = S);
+}
+
+// Sum over the box [x0, x1) x [y0, y1) (source px, 0 <= x0 <= x1 <= w) of the piecewise-constant
+// image: bilinear reads of the table at fractional corners are the exact integral.
+function boxSum(S, W1, w, h, x0, y0, x1, y1) {
+  return satAt(S, W1, w, h, x1, y1) - satAt(S, W1, w, h, x0, y1) - satAt(S, W1, w, h, x1, y0) + satAt(S, W1, w, h, x0, y0);
+}
+function satAt(S, W1, w, h, x, y) {
+  let i = x | 0, j = y | 0;
+  if (i >= w) i = w - 1;
+  if (j >= h) j = h - 1;
+  const fx = x - i, fy = y - j, p = j * W1 + i;
+  const top = S[p] + (S[p + 1] - S[p]) * fx;
+  const bot = S[p + W1] + (S[p + W1 + 1] - S[p + W1]) * fx;
+  return top + (bot - top) * fy;
+}
+
+// cos / sin that every engine agrees on: exact at quarter turns, float32-rounded otherwise
+// (Math.cos may differ in the last bit between engines).
+function turn(deg) {
+  const d = ((deg % 360) + 360) % 360;
+  if (d % 90 === 0) return [[1, 0], [0, 1], [-1, 0], [0, -1]][d / 90];
+  const r = d * Math.PI / 180;
+  return [Math.fround(Math.cos(r)), Math.fround(Math.sin(r))];
 }
 
 /**
- * Resample the square crop of `source` to a W x H grid. Sample cells are generally not square in
- * the photo (the grid's cell aspect differs), which is what keeps physical proportions on the target.
- * source: ImageBitmap / canvas / img, or an ImageData-like { width, height, data } (pure path).
+ * Resample the square crop (or, without a crop, the whole image) of a decoded photo to W x H.
+ * Each sample averages its footprint in the photo (area average when shrinking; at least one
+ * source pixel wide, which is bilinear interpolation when enlarging). The footprint of a rotated
+ * crop is taken as the axis-aligned box of the same extent, exact at quarter turns. The part of a
+ * footprint outside the photo is transparent paper. Transparent pixels composite over white, and
+ * alpha is kept (A, null when every sample is opaque) for the blank-stays-blank rule.
  */
-export function sampleImage(source, crop, W, H, { color = false } = {}) {
-  crop = { ...CROP_DEFAULTS, ...crop };
-  const w = source.width, h = source.height;
-  if (source.data && !(typeof HTMLCanvasElement !== 'undefined' && source instanceof HTMLCanvasElement)) {
-    return sampleFromRGBA(source.data, w, h, W, H, { color, crop });
+export function sampleDecoded(dec, crop, W, H, { color = false } = {}) {
+  const w = dec.width, h = dec.height, W1 = w + 1;
+  let cx, cy, sideX, sideY, cos = 1, sin = 0;
+  if (crop) {
+    const c = { ...CROP_DEFAULTS, ...crop };
+    cx = c.x * w; cy = c.y * h;
+    sideX = sideY = cropSide(w, h, c);
+    [cos, sin] = turn(+c.rotation || 0);
+  } else {
+    cx = w / 2; cy = h / 2; sideX = w; sideY = h;
   }
-  const side = cropSide(w, h, crop);
-  const S = superFactor(side, W, H);
-  const cw = W * S, ch = H * S;
-  const ctx = scratchCtx(cw, ch);
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.clearRect(0, 0, cw, ch);
-  ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = 'high';
-  // rotate in isotropic photo pixels first, then squash the square onto the W x H grid
-  ctx.translate(cw / 2, ch / 2);
-  ctx.scale(cw / side, ch / side);
-  ctx.rotate((crop.rotation || 0) * Math.PI / 180);
-  ctx.translate(-crop.x * w, -crop.y * h);
-  ctx.drawImage(source, 0, 0, w, h);
-  const data = ctx.getImageData(0, 0, cw, ch).data;
-  return boxDown(data, cw, ch, S, W, H, color);
-}
-
-/** Average S x S blocks of straight RGBA, composited over white. */
-function boxDown(data, cw, ch, S, W, H, color) {
+  const { Y, A: SA } = dec.sat || buildSat(dec);
+  const RGB = color ? dec.satRGB || buildSatRGB(dec) : null;
+  const du = sideX / W, dv = sideY / H;
+  const hx = Math.sqrt((du * cos) ** 2 + (dv * sin) ** 2) / 2;
+  const hy = Math.sqrt((du * sin) ** 2 + (dv * cos) ** 2) / 2;
+  const fx = Math.max(hx, 0.5), fy = Math.max(hy, 0.5);
   const N = W * H;
   const L = new Float32Array(N);
   const rgb = color ? new Uint8ClampedArray(N * 3) : null;
-  const A = new Float32Array(N);
-  const inv = 1 / (S * S);
+  const Aout = new Float32Array(N);
+  const inv255 = 1 / 255;
   for (let y = 0, i = 0; y < H; y++) {
+    const v = ((y + 0.5) / H - 0.5) * sideY;
     for (let x = 0; x < W; x++, i++) {
-      let ra = 0, ga = 0, ba = 0, aa = 0;
-      for (let sy = 0; sy < S; sy++) {
-        let p = ((y * S + sy) * cw + x * S) * 4;
-        for (let sx = 0; sx < S; sx++, p += 4) {
-          const a = data[p + 3];
-          ra += data[p] * a; ga += data[p + 1] * a; ba += data[p + 2] * a; aa += a;
-        }
+      const u = ((x + 0.5) / W - 0.5) * sideX;
+      // inverse of a clockwise rotation of the photo about the crop centre
+      const px = cx + u * cos + v * sin;
+      const py = cy - u * sin + v * cos;
+      // share of the sample's own footprint that lies on the photo
+      const covX = px - hx >= 0 && px + hx <= w ? 1 : (Math.min(px + hx, w) - Math.max(px - hx, 0)) / (2 * hx);
+      const covY = py - hy >= 0 && py + hy <= h ? 1 : (Math.min(py + hy, h) - Math.max(py - hy, 0)) / (2 * hy);
+      const x0 = px - fx > 0 ? px - fx : 0, x1 = px + fx < w ? px + fx : w;
+      const y0 = py - fy > 0 ? py - fy : 0, y1 = py + fy < h ? py + fy : h;
+      const area = (x1 - x0) * (y1 - y0);
+      if (!(covX > 0 && covY > 0 && area > 0)) {   // off the photo (or NaN): paper
+        L[i] = 1;
+        if (rgb) rgb[i * 3] = rgb[i * 3 + 1] = rgb[i * 3 + 2] = 255;
+        continue;
       }
-      writePixel(L, rgb, A, i, ra * inv / 255, ga * inv / 255, ba * inv / 255, aa * inv / 255);
+      const cov = covX * covY, k = cov / (area * SAT_SCALE);
+      const a = SA ? boxSum(SA, W1, w, h, x0, y0, x1, y1) * k * inv255 : cov;
+      const white = 255 * (1 - a);
+      Aout[i] = a;
+      L[i] = clamp01((boxSum(Y, W1, w, h, x0, y0, x1, y1) * k + white) * inv255);
+      if (rgb) {
+        rgb[i * 3] = boxSum(RGB[0], W1, w, h, x0, y0, x1, y1) * k + white;
+        rgb[i * 3 + 1] = boxSum(RGB[1], W1, w, h, x0, y0, x1, y1) * k + white;
+        rgb[i * 3 + 2] = boxSum(RGB[2], W1, w, h, x0, y0, x1, y1) * k + white;
+      }
     }
   }
-  return { W, H, L, rgb, A: opaque(A) };
+  return { W, H, L, rgb, A: opaque(Aout) };
 }
 
 // Alpha is only kept when some sample is not opaque (a photo has none; a logo PNG or a crop past
@@ -110,77 +298,21 @@ function opaque(A) {
   return null;
 }
 
-// Premultiplied sums -> composite over white -> luma (Rec. 709 weights on the encoded values).
-function writePixel(L, rgb, A, i, rp, gp, bp, a) {
-  A[i] = a;
-  const w = 255 * (1 - a);
-  const r = rp + w, g = gp + w, b = bp + w;
-  L[i] = clamp01((0.2126 * r + 0.7152 * g + 0.0722 * b) / 255);
-  if (rgb) { rgb[i * 3] = r; rgb[i * 3 + 1] = g; rgb[i * 3 + 2] = b; }
+/**
+ * Resample the square crop of `source` to a W x H grid (see sampleDecoded). Sample cells are
+ * generally not square in the photo (the grid's cell aspect differs), which keeps physical
+ * proportions on the target. source: DecodedImage, ImageData-like, or ImageBitmap / canvas / img.
+ */
+export function sampleImage(source, crop, W, H, { color = false } = {}) {
+  return sampleDecoded(decodeSource(source), crop || {}, W, H, { color });
 }
 
 /**
- * Pure resample of straight RGBA bytes to W x H, composited over white. With `crop` it takes the
- * square crop (rotation included) like sampleImage; without, the whole image. Each sample averages
- * S x S bilinear taps; taps outside the photo read as white paper.
+ * Pure resample of straight RGBA bytes at their own resolution (no decode cap), same method as
+ * sampleImage. With `crop` it takes the square crop (rotation included); without, the whole image.
  */
 export function sampleFromRGBA(rgba, srcW, srcH, W, H, { color = false, crop = null } = {}) {
-  let cx, cy, sideX, sideY, rot = 0;
-  if (crop) {
-    const c = { ...CROP_DEFAULTS, ...crop };
-    cx = c.x * srcW; cy = c.y * srcH;
-    sideX = sideY = cropSide(srcW, srcH, c);
-    rot = (c.rotation || 0) * Math.PI / 180;
-  } else {
-    cx = srcW / 2; cy = srcH / 2; sideX = srcW; sideY = srcH;
-  }
-  const S = superFactor(Math.max(sideX, sideY), W, H);
-  const cos = Math.cos(rot), sin = Math.sin(rot);
-  const N = W * H;
-  const L = new Float32Array(N);
-  const rgb = color ? new Uint8ClampedArray(N * 3) : null;
-  const A = new Float32Array(N);
-  const inv = 1 / (S * S);
-  const tap = [0, 0, 0, 0];
-  for (let y = 0, i = 0; y < H; y++) {
-    for (let x = 0; x < W; x++, i++) {
-      let ra = 0, ga = 0, ba = 0, aa = 0;
-      for (let sy = 0; sy < S; sy++) {
-        const v = ((y + (sy + 0.5) / S) / H - 0.5) * sideY;
-        for (let sx = 0; sx < S; sx++) {
-          const u = ((x + (sx + 0.5) / S) / W - 0.5) * sideX;
-          // inverse of the canvas transform: undo the clockwise rotation
-          const px = cx + u * cos + v * sin;
-          const py = cy - u * sin + v * cos;
-          bilinear(rgba, srcW, srcH, px - 0.5, py - 0.5, tap);
-          ra += tap[0]; ga += tap[1]; ba += tap[2]; aa += tap[3];
-        }
-      }
-      // taps are already premultiplied 0..255 with alpha 0..1
-      writePixel(L, rgb, A, i, ra * inv, ga * inv, ba * inv, aa * inv);
-    }
-  }
-  return { W, H, L, rgb, A: opaque(A) };
-}
-
-// Bilinear tap returning premultiplied rgb (0..255 * alpha) and alpha (0..1). Taps outside the
-// photo's rectangle are transparent; inside it, neighbours clamp to the edge pixel (as canvas
-// drawImage does), else the outer half-pixel ring blends with nothing and every crop that spans the
-// photo gets a pale fringe that auto levels then stretch into a white frame.
-function bilinear(d, w, h, x, y, out) {
-  out[0] = out[1] = out[2] = out[3] = 0;
-  if (!(x >= -0.5 && y >= -0.5 && x <= w - 0.5 && y <= h - 0.5)) return;
-  const x0 = Math.floor(x), y0 = Math.floor(y);
-  const fx = x - x0, fy = y - y0;
-  for (let k = 0; k < 4; k++) {
-    let xx = x0 + (k & 1), yy = y0 + (k >> 1);
-    xx = xx < 0 ? 0 : xx >= w ? w - 1 : xx;
-    yy = yy < 0 ? 0 : yy >= h ? h - 1 : yy;
-    const wt = ((k & 1) ? fx : 1 - fx) * ((k >> 1) ? fy : 1 - fy);
-    const p = (yy * w + xx) * 4;
-    const a = d[p + 3] / 255 * wt;
-    out[0] += d[p] * a; out[1] += d[p + 1] * a; out[2] += d[p + 2] * a; out[3] += a;
-  }
+  return sampleDecoded(new DecodedImage(srcW, srcH, rgba), crop, W, H, { color });
 }
 
 /**

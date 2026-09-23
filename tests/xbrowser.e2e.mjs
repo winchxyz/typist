@@ -2,9 +2,11 @@
 //  1. Given identical lightness (and colour), everything after sampling must give byte-identical
 //     Grids in node, Chromium, Firefox and WebKit: toneGrid + every encoder, and the whole
 //     converter fed a pure RGBA source (sampleFromRGBA is plain JS).
-//  2. sampleImage (canvas resample) may differ between engines: measure by how much, and how many
-//     Braille cells that changes.
-//  3. Inside each engine, the canvas path and the pure path must agree (rotation sign, crop centre).
+//  2. Real files: each engine decodes the photo once (setSource -> RGBA, long side <= 1024) and
+//     resamples it in plain JS. Report how far the decoded bytes differ between engines (JPEG
+//     decoders may differ by a level or two) and how many Braille cells that changes; the Grid of
+//     one engine's decoded bytes, recomputed in node, must equal that engine's Grid exactly.
+//  3. Inside each engine, sampleImage(bitmap) and sampleFromRGBA(native bytes) must agree.
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const PW = 'C:/Users/oxman/open-design/node_modules/.pnpm/playwright-core@1.60.0/node_modules/playwright-core';
@@ -81,7 +83,11 @@ async function canvasPart(files) {
       const c = conv.createConverter();
       c.setSource(bmp);
       const g = c.run(crop, { mode: 'braille', cols: 40, rows: 22 });
-      res[key] = { L: Array.from(a.L), canvasVsPure: { max: md, mean: sd / a.L.length }, cp: Array.from(g.cp), size: [bmp.width, bmp.height] };
+      const dec = c.decoded;
+      let s = '';
+      if (!crop.rotation) for (let i = 0; i < dec.data.length; i += 8192) s += String.fromCharCode.apply(null, dec.data.subarray(i, i + 8192));
+      res[key] = { L: Array.from(a.L), canvasVsPure: { max: md, mean: sd / a.L.length }, cp: Array.from(g.cp), size: [bmp.width, bmp.height],
+        decoded: crop.rotation ? null : { w: dec.width, h: dec.height, rgba: btoa(s) }, crop };
     }
   }
   return res;
@@ -113,7 +119,8 @@ const base = new URL('..', import.meta.url).href.replace(/\/$/, '');
 const ref = await pipeline(base, payload);
 console.log(`node: ${Object.keys(ref.hashes).length} hashes`);
 
-const files = ['/img/samples/portrait.jpg', '/img/samples/logo.jpg', '/tests/fixtures/logo_alpha.png', '/tests/fixtures/portrait_exif6.jpg'];
+const files = ['/tests/fixtures/photo_hopper.jpg', '/img/samples/portrait.jpg', '/img/samples/logo.jpg', '/tests/fixtures/dark.jpg',
+  '/tests/fixtures/logo_alpha.png', '/tests/fixtures/portrait_exif6.jpg'];
 const canvas = {};
 let identicalFail = 0;
 for (const name of ENGINES) {
@@ -138,7 +145,7 @@ async function timing() {
   const bmp = await createImageBitmap(await (await fetch('/img/samples/portrait.jpg')).blob());
   const c = conv.createConverter();
   c.setSource(bmp);
-  const fresh = [], tone = [], big = [];
+  const fresh = [], tone = [], big = [], asc = [];
   c.run({ x: 0.5, y: 0.5 }, { mode: 'braille', cols: 60, rows: 40 });   // warm up the JIT
   for (let k = 0; k < 9; k++) {
     let t0 = performance.now();
@@ -153,9 +160,16 @@ async function timing() {
     c.run({ x: 0.5, y: 0.5 - k * 0.001 }, { mode: 'braille', cols: 200, rows: 110 });
     big.push(performance.now() - t0);
   }
+  c.run({ x: 0.5, y: 0.5 }, { mode: 'ascii', cols: 60, rows: 28 });
+  for (let k = 0; k < 7; k++) {
+    const t0 = performance.now();
+    c.run({ x: 0.5, y: 0.5 + (k + 1) * 0.001 }, { mode: 'ascii', cols: 60, rows: 28 });
+    asc.push(performance.now() - t0);
+  }
   const med = a => a.slice().sort((x, y) => x - y)[a.length >> 1];
-  return { fresh: med(fresh), freshMax: Math.max(...fresh), tone: med(tone), toneMax: Math.max(...tone), big200: med(big) };
+  return { fresh: med(fresh), freshMax: Math.max(...fresh), tone: med(tone), toneMax: Math.max(...tone), big200: med(big), ascii: med(asc) };
 }
+let budgetFail = false;
 {
   const browser = await pw.chromium.launch({ headless: true, args: ['--use-angle=d3d11', '--enable-gpu', '--ignore-gpu-blocklist'] });
   const page = await browser.newPage();
@@ -165,21 +179,39 @@ async function timing() {
   await cdp.send('Emulation.setCPUThrottlingRate', { rate: 4 });
   const r4 = await page.evaluate(`(${timing.toString()})()`);
   await browser.close();
-  const f = r => `fresh 60x40 median ${r.fresh.toFixed(1)} ms (max ${r.freshMax.toFixed(1)}), tone change ${r.tone.toFixed(1)} ms (max ${r.toneMax.toFixed(1)}), 200x110 fresh ${r.big200.toFixed(0)} ms`;
+  const f = r => `fresh 60x40 median ${r.fresh.toFixed(1)} ms (max ${r.freshMax.toFixed(1)}), tone change ${r.tone.toFixed(1)} ms (max ${r.toneMax.toFixed(1)}), 200x110 fresh ${r.big200.toFixed(0)} ms, ASCII 60x28 fresh ${r.ascii.toFixed(1)} ms`;
   console.log('chromium 1x: ' + f(r1));
-  console.log('chromium 4x throttled: ' + f(r4) + (r4.fresh < 30 && r4.tone < 10 ? '  (within the desktop budget)' : '  (over the desktop budget of 30 / 10 ms)'));
+  console.log('chromium 4x throttled: ' + f(r4) + (r4.fresh < 30 && r4.tone < 10 && r4.ascii < 60 ? '  (within budget: 30 / 10 / ASCII 60 ms)' : '  (OVER budget: 30 / 10 / ASCII 60 ms)'));
+  if (!(r4.fresh < 30 && r4.tone < 10 && r4.ascii < 60)) budgetFail = true;
 }
 
-// ---------- canvas sampling: engine vs engine, and canvas vs pure inside each engine ----------
-let pathFail = 0;
+// ---------- real files: decoded bytes and Grids engine vs engine; bitmap vs raw bytes inside each ----------
+let pathFail = 0, replayFail = 0;
+const convNode = await import(base + '/js/convert.js');
 for (const key of Object.keys(canvas.chromium)) {
   const line = [key.padEnd(28)];
   for (const name of ENGINES) {
-    const c = canvas[name][key].canvasVsPure;
-    line.push(`${name} canvas-vs-pure max ${c.max.toFixed(3)} mean ${c.mean.toFixed(4)}`);
+    const e = canvas[name][key], c = e.canvasVsPure;
+    line.push(`${name} bitmap-vs-bytes max ${c.max.toFixed(3)} mean ${c.mean.toFixed(4)}`);
     if (c.mean > 0.02) pathFail++;
+    // the engine's own decoded bytes, converted in node, must give that engine's Grid exactly
+    const src = canvas[name][key.replace(':rot30', ':centre')].decoded;
+    const cn = convNode.createConverter();
+    cn.setSource({ width: src.w, height: src.h, data: new Uint8ClampedArray(Buffer.from(src.rgba, 'base64')) });
+    const gn = cn.run(e.crop, { mode: 'braille', cols: 40, rows: 22 });
+    if (gn.cp.some((v, i) => v !== e.cp[i])) { replayFail++; line.push(`${name} NODE REPLAY MISMATCH`); }
   }
   console.log(line.join(' | '));
+  if (key.endsWith(':centre')) {
+    for (const [a, b] of [['chromium', 'firefox'], ['chromium', 'webkit'], ['firefox', 'webkit']]) {
+      const A = canvas[a][key].decoded, B = canvas[b][key].decoded;
+      if (A.w !== B.w || A.h !== B.h) { console.log(`   ${a} vs ${b}: decoded size differs ${A.w}x${A.h} vs ${B.w}x${B.h}`); continue; }
+      const x = Buffer.from(A.rgba, 'base64'), y = Buffer.from(B.rgba, 'base64');
+      let md = 0, sd = 0, nd = 0;
+      for (let i = 0; i < x.length; i++) { const d = Math.abs(x[i] - y[i]); if (d) { nd++; sd += d; if (d > md) md = d; } }
+      console.log(`   ${a} vs ${b}: decoded ${A.w}x${A.h} bytes differing ${nd}/${x.length} (${(100 * nd / x.length).toFixed(2)}%), max ${md}, mean ${(sd / x.length).toFixed(4)}`);
+    }
+  }
   for (const [a, b] of [['chromium', 'firefox'], ['chromium', 'webkit'], ['firefox', 'webkit']]) {
     const A = canvas[a][key], B = canvas[b][key];
     let md = 0, sd = 0, cells = 0;
@@ -188,5 +220,5 @@ for (const key of Object.keys(canvas.chromium)) {
     console.log(`   ${a} vs ${b}: sampled L max diff ${md.toFixed(4)}, mean ${(sd / A.L.length).toFixed(5)}; Braille 40x22 cells differing ${cells}/${A.cp.length}; decoded size ${A.size} vs ${B.size}`);
   }
 }
-console.log(`RESULT identical-after-sampling mismatches: ${identicalFail}; canvas-vs-pure disagreements (mean > 0.02): ${pathFail}`);
-process.exitCode = identicalFail || pathFail ? 1 : 0;
+console.log(`RESULT identical-after-sampling mismatches: ${identicalFail}; bitmap-vs-bytes disagreements (mean > 0.02): ${pathFail}; node replays of engine decodes that differ: ${replayFail}; budget ${budgetFail ? 'OVER' : 'ok'}`);
+process.exitCode = identicalFail || pathFail || replayFail || budgetFail ? 1 : 0;

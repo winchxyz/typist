@@ -1,12 +1,22 @@
-// Classic ASCII: a density ramp and the shape-vector matcher after Alex Harri, "ASCII characters
-// are not pixels" (alexharri.com/blog/ascii-rendering).
+// Classic ASCII: a density ramp and a shape matcher after Alex Harri, "ASCII characters are not
+// pixels" (alexharri.com/blog/ascii-rendering), adapted so that edges read as | / \ _ - ( ) and
+// paper stays blank.
 //
 // Shape method, per cell:
-//   1. six sampling circles in a staggered 2 x 3 layout measure mean ink (1 - L) -> a 6D vector;
-//   2. directional contrast: each circle is pushed down when the neighbouring cells' nearest circles
-//      (the "external" circles) hold more ink, which sharpens edges between cells;
-//   3. global contrast: v = (v / max)^e * max over the vector, which exaggerates its shape;
-//   4. nearest glyph (Euclidean) among the committed glyph vectors in shape-vectors.js.
+//   1. levels: ink = 1 - L is rescaled between the image's own paper and dark levels (histogram
+//      percentiles), so "near paper" means near this image's white, whatever its exposure;
+//   2. fifteen sampling circles on a 3 x 5 lattice measure mean ink. Harri's six staggered circles
+//      cannot tell a centred '|' from flat grey (both fill every circle equally) and put '_' and
+//      'L' close together; a middle column and a bottom row can;
+//   3. paper gate: a cell whose ink is near paper and has no structure (no edge or line crossing
+//      it) is a space, so backgrounds stay clean;
+//   4. directional contrast: each boundary circle is pushed down when the neighbouring cells'
+//      adjacent circles hold more ink (Harri's external circles, on the lattice), and global
+//      contrast v = (v / max)^e * max exaggerates the cell's shape;
+//   5. nearest glyph by a distance that weighs the *direction* of the ink vector (cosine) more
+//      than its amount, the more so the more structure the cell has: a thin faint line and a thick
+//      dark one both pick '|', while flat tone is matched on density. Only glyphs that read as a
+//      shape or a tone take part; busy letters and digits are left out.
 // Glyph vectors are committed data (dev/shapes.html renders them from one font), and every step
 // here is plain arithmetic, so the same lightness grid gives the same text in every engine.
 // Namespace import: an older or placeholder data file may lack some exports (SHAPES_CURRENT says so).
@@ -31,48 +41,66 @@ export const CELL_ASPECT = 0.46;
 export const ASCII_SUB = [8, 17];
 
 // Circle geometry in cell-width units: x runs 0..1 across the cell, y runs 0..HT down it, so the
-// circles stay round on the rendered (tall) cell. Left circles sit lower and right ones higher
-// (Harri's stagger), which closes the gaps a plain 2 x 3 grid leaves for diagonals.
+// circles stay round on the rendered (tall) cell. A plain lattice: 3 columns x 5 rows, radius a
+// little over half the pitch so neighbouring circles overlap and no stroke falls in a gap.
 const HT = 1 / CELL_ASPECT;
-const COL_X = [0.27, 0.73];
-const STAGGER = 0.1;
-export const CIRCLE_R = 0.34;
-/** Internal circle centres [x, y], order TL, TR, ML, MR, BL, BR (Harri's indices 0..5). */
-export const CIRCLES = [0, 1, 2].flatMap(row => {
-  const y = HT * (2 * row + 1) / 6;
-  return [[COL_X[0], y + STAGGER], [COL_X[1], y - STAGGER]];
-});
+export const GRID = [3, 5];
+const [GX, GY] = GRID;
+export const DIMS = GX * GY;
+export const CIRCLE_R = 0.28;
+/** Circle centres [x, y], row-major (row 0 = top). */
+export const CIRCLES = Array.from({ length: DIMS }, (_, k) => [((k % GX) + 0.5) / GX, HT * (Math.floor(k / GX) + 0.5) / GY]);
 /** Sideways glyph offsets (cell widths) measured as extra candidates of the same glyph. */
-export const SHIFTS = [0, -0.25, 0.25];
-// Shifted candidates pay a small distance penalty so a centred glyph wins near-ties.
-const SHIFT_PENALTY = 0.01;
-export const GEOMETRY_KEY = `a${CELL_ASPECT}-x${COL_X.join(',')}-s${STAGGER}-r${CIRCLE_R}-d${SHIFTS.join(',')}`;
-
-// External circles are the neighbouring cells' nearest internal circles: [dx, dy, circle].
-//   0 1      above: the upper cell's BL, BR
-// 2 . . 3    left cell's TR / MR / BR, right cell's TL / ML / BL
-// 4 . . 5
-// 6 . . 7
-//   8 9      below: the lower cell's TL, TR
-const EXTERNAL = [
-  [0, -1, 4], [0, -1, 5],
-  [-1, 0, 1], [1, 0, 0],
-  [-1, 0, 3], [1, 0, 2],
-  [-1, 0, 5], [1, 0, 4],
-  [0, 1, 0], [0, 1, 1],
-];
-// Which external circles bear on each internal circle (Harri's AFFECTING_EXTERNAL_INDICES).
-const AFFECTING = [[0, 1, 2, 4], [0, 1, 3, 5], [2, 4, 6], [3, 5, 7], [4, 6, 8, 9], [5, 7, 8, 9]];
+export const SHIFTS = [0, -0.15, 0.15, -0.3, 0.3];
+export const GEOMETRY_KEY = `g${GX}x${GY}-a${CELL_ASPECT}-r${CIRCLE_R}-d${SHIFTS.join(',')}`;
 
 // Default exponents at contrast = 1; `contrast` scales (e - 1), so 0 switches enhancement off.
 const GLOBAL_EXP = 2;
 const DIRECTIONAL_EXP = 3;
 
+// Levels: paper and dark are these percentiles of the lightness histogram.
+const PAPER_PCT = 0.97, DARK_PCT = 0.02, PAPER_MIN = 0.65;
+// Paper gate (normalised ink, 0 = this image's paper, 1 = its darkest): a cell is blank when its
+// mean ink is under GATE_TONE and its circles differ by less than GATE_STRUCT (no edge, no line).
+const GATE_TONE = 0.16, GATE_STRUCT = 0.3;
+// Distance = PEN + WT * tone error^2 + (WD0 + WD1 * structure) * direction error^2, where
+// structure = circle ink range / STRUCT_FULL (clamped to 1), tone error in units of the densest
+// glyph, direction error = squared distance of the unit vectors (2 - 2 cos).
+// The tone weight eases off as structure grows (TONE_EASE): a thin line is light in tone but
+// must still draw as a stroke.
+const WT = 3, TONE_EASE = 0.75, WD0 = 0.25, WD1 = 2.2, STRUCT_FULL = 0.4;
+// Flat cells (circle ink range under FLAT_RANGE) skip the shape match and take the classic density
+// ramp by level: one glyph per tone band reads as even tone, where a shape match would pick among
+// many glyphs of similar density (brackets, letters) and draw false texture.
+const FLAT_RANGE = 0.3;
+/** Tone ramp for flat cells, light -> dark (Paul Bourke's classic 10 levels). */
+export const TONE_RAMP = ' .:-=+*#%@';
+
+// Glyphs the matcher may use and their penalty (added to the distance). Tier 0: strokes and tone
+// marks that read as shape; tier 1: a few letters that read as corners or texture; dense: fill for
+// dark areas (they win on density, not on shape). Everything else (most letters, digits, $ ? etc.)
+// reads as text at small sizes and is left out.
+const TIERS = [
+  [" .,:;'\"-_=+|/\\()!", 0],
+  ['^*', 0.03],   // a peak and a blob: right sometimes, but they win small corners too easily
+  ['[]iloLTY', 0.05],
+  ['#%@&MWdbpq', 0.02],
+];
+// Shifted candidates pay SHIFT_PENALTY per 0.15 cell of offset, so a centred glyph wins near-ties;
+// only glyphs whose position is their meaning (strokes and marks) are tried shifted.
+const SHIFT_PENALTY = 0.01;
+const SHIFTABLE = new Set(Array.from("|/\\()!.,:;'\""));
+// Direction weights per lattice row: no glyph reaches the top fifth of the line box (above cap
+// height) and few reach the bottom one, so ink there (a line running on through the cell) should
+// not pull the match towards brackets and braces, the only glyphs that span it.
+const ROW_W = [0.3, 1, 1, 1, 0.7];
+const DIM_W = Float64Array.from({ length: DIMS }, (_, k) => ROW_W[Math.floor(k / GX)]);
+
 /**
- * Pixel weights of each internal circle over a w x h cell raster (area coverage by k x k
- * supersampling; weights sum to 1 per circle). Shared by the matcher and the glyph generator so
- * image cells and glyphs are measured with exactly the same circles.
- * Returns [{ px: Int32Array (y * w + x), wt: Float64Array }] x 6.
+ * Pixel weights of each circle over a w x h cell raster (area coverage by k x k supersampling;
+ * weights sum to 1 per circle). Shared by the matcher and the glyph generator so image cells and
+ * glyphs are measured with exactly the same circles.
+ * Returns [{ px: Int32Array (y * w + x), wt: Float64Array }] x DIMS.
  */
 export function circleWeights(w, h, k = w * h > 4096 ? 1 : 6) {
   return CIRCLES.map(([cx, cy]) => {
@@ -156,12 +184,84 @@ function powLerp(t, x) {
   return t[i] + (t[i + 1] - t[i]) * (f - i);
 }
 
-const GV = Float64Array.from(VECTORS);
+// Candidate tables: one candidate per (allowed glyph, shift). U = unit direction, T = tone (mean
+// circle ink), PEN = tier + shift penalty. TSCALE = densest allowed glyph's tone, so black maps to it.
 const NS = (DATA_SHIFTS && DATA_SHIFTS.length) || 1;
-const NC = GV.length / 6;                     // candidates = glyphs x shifts
-const CAND_CP = Uint32Array.from({ length: NC }, (_, i) => GLYPHS.codePointAt(Math.floor(i / NS)));
-const CAND_PEN = Float64Array.from({ length: NC }, (_, i) => (i % NS && DATA_SHIFTS[i % NS] ? SHIFT_PENALTY : 0));
+const DATA_OK = VECTORS.length > 0 && VECTORS.length === GLYPHS.length * NS * DIMS;
+const PEN_OF = new Map();
+for (const [set, pen] of TIERS) for (const ch of set) PEN_OF.set(ch, pen);
+const cand = [];
+if (DATA_OK) {
+  for (let gi = 0; gi < GLYPHS.length; gi++) {
+    const ch = GLYPHS[gi];
+    if (!PEN_OF.has(ch)) continue;
+    for (let s = 0; s < NS; s++) {
+      if (s && !SHIFTABLE.has(ch)) continue;
+      const o = (gi * NS + s) * DIMS;
+      const v = VECTORS.slice(o, o + DIMS);
+      let n2 = 0, sum = 0;
+      v.forEach((x, k) => { const y = x * DIM_W[k]; n2 += y * y; sum += x; });
+      const nrm = Math.sqrt(n2);
+      cand.push({
+        cp: ch.codePointAt(0), shift: s,
+        u: v.map((x, k) => (nrm > 0 ? x * DIM_W[k] / nrm : 0)), t: sum / DIMS,
+        pen: PEN_OF.get(ch) + SHIFT_PENALTY * Math.round(Math.abs(DATA_SHIFTS[s] || 0) / 0.15),
+      });
+    }
+  }
+}
+const NC = cand.length;
+const CU = new Float64Array(NC * DIMS), CT = new Float64Array(NC), CPEN = new Float64Array(NC);
+const CAND_CP = new Uint32Array(NC);
+cand.forEach((c, i) => { CU.set(c.u, i * DIMS); CT[i] = c.t; CPEN[i] = c.pen; CAND_CP[i] = c.cp; });
+const SPACE_CAND = cand.findIndex(c => c.cp === 0x20);
+// Tone curve: normalised ink -> target glyph tone, interpolated through the ramp glyphs' measured
+// tone (made monotone), so a structured cell gets the same density as the flat ramp would give it.
+const RAMP_CP = Uint32Array.from(TONE_RAMP, ch => ch.codePointAt(0));
+const RAMP_T = (() => {
+  const t = Array.from(TONE_RAMP, ch => { const c = cand.find(o => o.cp === ch.codePointAt(0) && !o.shift); return c ? c.t : 0; });
+  for (let i = 1; i < t.length; i++) if (t[i] < t[i - 1]) t[i] = t[i - 1];
+  return Float64Array.from(t);
+})();
+const TSCALE = NC ? Math.max(...CT) : 1;
+function toneTarget(ink) {
+  const f = ink * (RAMP_T.length - 1), i = Math.min(RAMP_T.length - 2, f | 0);
+  return RAMP_T[i] + (RAMP_T[i + 1] - RAMP_T[i]) * (f - i);
+}
+
+// For each circle, the lattice offsets [dx, dy] of the neighbouring circles that lie in another
+// cell (Harri's external circles): boundary circles have 3 or 5, inner ones none.
+const EXT = CIRCLES.map((_, k) => {
+  const i = k % GX, j = Math.floor(k / GX), list = [];
+  for (let dy = -1; dy <= 1; dy++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      const ii = i + dx, jj = j + dy;
+      if ((dx || dy) && (ii < 0 || ii >= GX || jj < 0 || jj >= GY)) list.push([dx, dy]);
+    }
+  }
+  return list;
+});
 const weightCache = new Map();
+
+/** Paper and dark lightness of a grid: histogram percentiles (256 bins, O(n), deterministic). */
+export function levelsOf(L) {
+  const hist = new Uint32Array(256);
+  let n = 0;
+  for (let i = 0; i < L.length; i++) {
+    const v = L[i];
+    if (!(v === v)) continue;   // NaN
+    hist[v <= 0 ? 0 : v >= 1 ? 255 : (v * 255 + 0.5) | 0]++;
+    n++;
+  }
+  if (!n) return { paper: 1, dark: 0 };
+  const at = p => {
+    const target = p * n;
+    let acc = 0;
+    for (let b = 0; b < 256; b++) { acc += hist[b]; if (acc >= target) return b / 255; }
+    return 1;
+  };
+  return { paper: at(PAPER_PCT), dark: at(DARK_PCT) };
+}
 
 /**
  * Lightness grid -> one code point per cell (row-major).
@@ -178,54 +278,87 @@ export function asciiCells(L, W, H, cols, rows, { method = 'shape', ramp = RAMP,
   }
   const out = new Uint32Array(cols * rows);
   if (method === 'ramp') return rampCells(L, W, cols, rows, ramp, out);
-  if (!GV.length) throw new Error('shape-vectors.js is empty: run dev/shapes.html');
+  if (!NC) throw new Error('shape-vectors.js does not match js/ascii.js: run dev/shapes.html');
 
-  // 1. internal circle vectors (mean ink)
+  // 1. levels relative to this image: ink 0 at its paper, 1 at its dark end
+  // (paper is never darker than PAPER_MIN: an all-black or all-grey grid is tone, not paper)
+  const lv = levelsOf(L);
+  const paper = lv.paper > PAPER_MIN ? lv.paper : PAPER_MIN;
+  const inkLo = 1 - paper, span = Math.max(0.25, paper - lv.dark);
+
+  // 2. circle means on the global lattice (GX*cols x GY*rows), normalised ink
   let circ = weightCache.get(W);
   if (!circ) {
     circ = circleWeights(SX, SY).map(({ px, wt }) => ({ off: Int32Array.from(px, p => Math.floor(p / SX) * W + (p % SX)), wt }));
     weightCache.set(W, circ);
   }
-  const n = cols * rows;
-  const raw = new Float64Array(n * 6);
+  const LW = cols * GX, LH = rows * GY;
+  const lat = new Float64Array(LW * LH);
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
-      const base = r * SY * W + c * SX, o = (r * cols + c) * 6;
-      for (let k = 0; k < 6; k++) {
+      const base = r * SY * W + c * SX;
+      for (let k = 0; k < DIMS; k++) {
         const { off, wt } = circ[k];
         let s = 0;
         for (let t = 0; t < off.length; t++) s += wt[t] * L[base + off[t]];
-        const ink = 1 - s;
-        raw[o + k] = ink < 0 ? 0 : ink > 1 ? 1 : ink;
+        const ink = (1 - s - inkLo) / span;
+        lat[(r * GY + Math.floor(k / GX)) * LW + c * GX + (k % GX)] = ink > 0 ? (ink < 1 ? ink : 1) : 0;   // NaN -> 0
       }
     }
   }
 
-  // 2. directional contrast from the neighbours' circles (outside the grid counts as paper),
-  // 3. global contrast, 4. nearest glyph.
+  // 3. gate, 4. directional + global contrast, 5. nearest glyph
   const eD = 1 + (DIRECTIONAL_EXP - 1) * contrast, eG = 1 + (GLOBAL_EXP - 1) * contrast;
   const tD = powTable(eD), tG = powTable(eG);
-  const ext = new Float64Array(10), v = new Float64Array(6);
-  let prev = 0;
+  const raw = new Float64Array(DIMS), v = new Float64Array(DIMS), u = new Float64Array(DIMS);
+  const invT = 1 / TSCALE;
+  let prev = SPACE_CAND >= 0 ? SPACE_CAND : 0;
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
-      const o = (r * cols + c) * 6;
-      for (let e = 0; e < 10; e++) {
-        const [dx, dy, k] = EXTERNAL[e];
-        const cc = c + dx, rr = r + dy;
-        ext[e] = cc < 0 || rr < 0 || cc >= cols || rr >= rows ? 0 : raw[(rr * cols + cc) * 6 + k];
+      const gx0 = c * GX, gy0 = r * GY;
+      let sum = 0, lo = 1, hi = 0;
+      for (let k = 0; k < DIMS; k++) {
+        const x = lat[(gy0 + Math.floor(k / GX)) * LW + gx0 + (k % GX)];
+        raw[k] = x; sum += x;
+        if (x < lo) lo = x;
+        if (x > hi) hi = x;
       }
-      let vmax = 0;
-      for (let k = 0; k < 6; k++) {
-        let x = raw[o + k], m = x;
-        const aff = AFFECTING[k];
-        for (let t = 0; t < aff.length; t++) if (ext[aff[t]] > m) m = ext[aff[t]];
+      const tone = sum / DIMS, range = hi - lo;
+      if (!(hi > 0)) { out[r * cols + c] = 0x20; continue; }
+
+      let vmax = 0, vmin = 1, vsum = 0;
+      for (let k = 0; k < DIMS; k++) {
+        let x = raw[k], m = x;
+        const ext = EXT[k];
+        for (let e = 0; e < ext.length; e++) {
+          const gx = gx0 + (k % GX) + ext[e][0], gy = gy0 + Math.floor(k / GX) + ext[e][1];
+          if (gx >= 0 && gy >= 0 && gx < LW && gy < LH) {
+            const y = lat[gy * LW + gx];
+            if (y > m) m = y;
+          }
+        }
         x = m > 0 ? powLerp(tD, x / m) * m : 0;
-        v[k] = x;
+        v[k] = x; vsum += x;
         if (x > vmax) vmax = x;
+        if (x < vmin) vmin = x;
       }
-      if (vmax > 0) for (let k = 0; k < 6; k++) v[k] = powLerp(tG, v[k] / vmax) * vmax;
-      prev = nearest(v, prev);
+      // gate after directional contrast: ink that belongs to a darker neighbour (the edge of a
+      // stroke that runs through the next cell) does not keep this cell from being paper
+      if (vsum / DIMS < GATE_TONE && vmax - vmin < GATE_STRUCT) { out[r * cols + c] = 0x20; continue; }
+      if (range < FLAT_RANGE) {
+        const li = Math.floor(tone * RAMP_CP.length);
+        out[r * cols + c] = RAMP_CP[li < RAMP_CP.length ? li : RAMP_CP.length - 1];
+        continue;
+      }
+      let n2 = 0;
+      if (vmax > 0) {
+        for (let k = 0; k < DIMS; k++) { const x = powLerp(tG, v[k] / vmax) * vmax * DIM_W[k]; v[k] = x; n2 += x * x; }
+      }
+      if (!(n2 > 0)) { out[r * cols + c] = 0x20; continue; }
+      const inv = 1 / Math.sqrt(n2);
+      for (let k = 0; k < DIMS; k++) u[k] = v[k] * inv;
+      const st = range >= STRUCT_FULL ? 1 : range / STRUCT_FULL;
+      prev = nearest(u, toneTarget(tone), WD0 + WD1 * st, WT * (1 - TONE_EASE * st) * invT * invT, prev);
       out[r * cols + c] = CAND_CP[prev];
     }
   }
@@ -234,24 +367,27 @@ export function asciiCells(L, W, H, cols, rows, { method = 'shape', ramp = RAMP,
 
 // Brute force with partial-distance early exit, seeded with the previous cell's glyph (neighbours
 // usually match, so the bound is tight from the start). Ties keep the seed, then the lower index.
-function nearest(v, seed) {
-  let best = seed, bd = dist(v, seed, Infinity);
+function nearest(u, t, wd, wt, seed) {
+  let best = seed, bd = dist(u, t, wd, wt, seed, Infinity);
   for (let g = 0; g < NC; g++) {
     if (g === seed) continue;
-    const d = dist(v, g, bd);
+    const d = dist(u, t, wd, wt, g, bd);
     if (d < bd) { bd = d; best = g; }
   }
   return best;
 }
-function dist(v, g, bound) {
-  const o = g * 6;
-  let d = CAND_PEN[g];
-  for (let k = 0; k < 6; k++) {
-    const t = v[k] - GV[o + k];
-    d += t * t;
-    if (d >= bound) return d;
+function dist(u, t, wd, wt, g, bound) {
+  const te = t - CT[g];
+  let d = CPEN[g] + wt * te * te;
+  if (d >= bound) return d;
+  const o = g * DIMS;
+  let a = 0;
+  for (let k = 0; k < DIMS; k++) {
+    const e = u[k] - CU[o + k];
+    a += e * e;
+    if (d + wd * a >= bound) return d + wd * a;
   }
-  return d;
+  return d + wd * a;
 }
 
 function rampCells(L, W, cols, rows, ramp, out) {
@@ -288,4 +424,4 @@ export function asciiInk(cp) {
 }
 
 /** True when the committed glyph vectors were generated with this file's circle geometry. */
-export const SHAPES_CURRENT = DATA_KEY === GEOMETRY_KEY;
+export const SHAPES_CURRENT = DATA_KEY === GEOMETRY_KEY && DATA_OK;

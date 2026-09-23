@@ -4,7 +4,7 @@ import { performance } from 'node:perf_hooks';
 import { createConverter, gridLines, DITHERS, smallGridBoost } from '../js/convert.js';
 import { encodeBraille, brailleDots, ditherDots } from '../js/dither.js';
 import { QUAD_CP, BLOCK_SET, blocksQuad, labGrid } from '../js/blocks.js';
-import { sampleFromRGBA, toneGrid, TONE_DEFAULTS } from '../js/tone.js';
+import { sampleFromRGBA, decodeSource, toneGrid, TONE_DEFAULTS } from '../js/tone.js';
 
 let pass = 0, fail = 0;
 const results = [];
@@ -206,6 +206,27 @@ test('sampler: transparent pixels are white paper, rotation turns the image', ()
   assert.ok(s90.L[0] < 0.05 && s90.L[7] < 0.05 && s90.L[63] > 0.95, 'dark half on top after 90 deg');
   const sc = sampleFromRGBA(PHOTO.data, PHOTO.width, PHOTO.height, 30, 40, { crop: CROP, color: true });
   assert.equal(sc.rgb.length, 30 * 40 * 3);
+});
+
+test('decode once: long side capped at 1024 by exact area averaging; samples are area means', () => {
+  // 2048 x 1024 fine checkerboard of 0 / 255 -> every decoded pixel averages one 2 x 2 block
+  const w = 2048, h = 1024, data = new Uint8ClampedArray(w * h * 4);
+  for (let y = 0, p = 0; y < h; y++) for (let x = 0; x < w; x++, p += 4) {
+    data[p] = data[p + 1] = data[p + 2] = (x + y) & 1 ? 255 : 0; data[p + 3] = 255;
+  }
+  const dec = decodeSource({ width: w, height: h, data });
+  assert.deepEqual([dec.width, dec.height], [1024, 512]);
+  assert.ok(dec.opaque);
+  for (let i = 0; i < dec.data.length; i += 4 * 997) assert.ok(Math.abs(dec.data[i] - 127.5) <= 0.5 && dec.data[i + 3] === 255, 'pixel ' + dec.data[i]);
+  // whole-image sample of a two-level image = its exact mean; a 1 x 1 sample of the halves is 0.5
+  const hv = halves(64, 64);
+  const one = sampleFromRGBA(hv.data, 64, 64, 1, 1);
+  assert.ok(Math.abs(one.L[0] - 0.5) < 1e-3, 'mean ' + one.L[0]);
+  // enlarging (8 source px -> 64 samples) interpolates linearly across the black / white edge
+  const up = sampleFromRGBA(halves(8, 8).data, 8, 8, 64, 1, { crop: { zoom: 1 } });
+  let steps = 0;
+  for (let x = 1; x < 64; x++) { assert.ok(up.L[x] >= up.L[x - 1] - 1e-6, 'monotone'); if (up.L[x] > up.L[x - 1] + 1e-6) steps++; }
+  assert.ok(steps >= 6, 'smooth ramp, not a hard step: ' + steps);
 });
 
 test('tone: auto hits the ink target, brightness works with auto, gamma > 1 lightens', () => {

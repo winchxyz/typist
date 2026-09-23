@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Typist sampling check</title>
+<style>
+  body { margin: 16px; background: #eceae4; color: #17171a; font: 13px/1.4 system-ui, sans-serif; }
+  canvas { display: block; margin: 0 0 24px; max-width: 100%; }
+  pre { font-size: 11px; }
+</style>
+</head>
+<body>
+<!-- Sampling check for the decode-once pure resampler (js/tone.js):
+       node tests/shoot.mjs "/dev/perf2.html?sheet=compare"  -> shots/sample_compare.png (old canvas path vs pure path)
+       node tests/shoot.mjs "/dev/perf2.html?sheet=perf" [--throttle 4] [--browser firefox|webkit]
+         -> timing breakdown (decode, sample, tone, encode) printed in window.__done
+     Query: img=<url> (default the Hopper photo), save=0. -->
+<div id="out"></div>
+<pre id="log"></pre>
+<script type="module" src="./perf2.js"></script>
+</body>
+</html>
