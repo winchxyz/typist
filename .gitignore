@@ -1,0 +1,5 @@
+shots/
+node_modules/
+tests/out/
+.claude/
+dev/research/

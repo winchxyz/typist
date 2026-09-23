@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Typist samples lab</title>
+<style>
+  body { margin: 0; background: #bbb; font: 12px system-ui; }
+  pre { margin: 8px; white-space: pre-wrap; }
+  canvas { max-width: 100%; display: block; }
+</style>
+</head>
+<body>
+<pre id="log"></pre>
+<script type="module">
+// Samples lab: render, bake and check the four built-in sample photos (dev only).
+//   /dev/samples.html?mode=sheet;size=512                all four side by side -> shots/sample_sheet.png
+//   /dev/samples.html?mode=one;id=portrait;crop=300,40,360;zoom=2   one render (a crop of the
+//        1024 px image, zoomed) -> shots/sample_one_<id>.png
+//   /dev/samples.html?mode=bake                          1024 px JPEG q0.9 + 160 px thumb per sample
+//        -> shots/sample_bake_<id>.jpg, shots/sample_bake_<id>-thumb.jpg (copy to img/samples/)
+//   /dev/samples.html?mode=small;src=baked|gen           each as a 56 x 64 dot grid (28 Braille
+//        columns): photo | grey grid | Atkinson dots | threshold dots -> shots/sample_small_<id>.png
+//   /dev/samples.html?mode=test                          js/samples.js loader contract checks
+// Sets window.__done = { ok, ... } for tests/shoot.mjs.
+import { renderSample, timings, IDS } from './sample-gen.js';
+import { SAMPLES, loadSample, thumbUrl } from '../js/samples.js';
+
+const q = new URLSearchParams(location.search);
+const mode = q.get('mode') || 'sheet';
+const ids = (q.get('ids') || IDS.join(',')).split(',');
+const log = t => { document.getElementById('log').textContent += t + '\n'; };
+
+async function saveFile(blob, name) {
+  const r = await fetch('/__file?name=' + encodeURIComponent(name), { method: 'POST', body: blob });
+  return r.json();
+}
+const toBlob = (c, type, qual) => new Promise(r => c.toBlob(r, type, qual));
+const savePng = async (c, name) => saveFile(await toBlob(c, 'image/png'), name + '.png');
+
+function canvas(w, h, fill = '#d9d5ce') {
+  const c = Object.assign(document.createElement('canvas'), { width: w, height: h });
+  const g = c.getContext('2d');
+  if (fill) { g.fillStyle = fill; g.fillRect(0, 0, w, h); }
+  return c;
+}
+function label(g, text, x, y) { g.fillStyle = '#222'; g.font = '13px system-ui'; g.fillText(text, x, y); }
+
+// Downscale with high-quality smoothing in halving steps (one big jump aliases fine detail).
+function scaleTo(src, w, h) {
+  let cur = src;
+  while (cur.width / 2 >= w && cur.height / 2 >= h) {
+    const n = canvas(Math.round(cur.width / 2), Math.round(cur.height / 2), null);
+    const g = n.getContext('2d'); g.imageSmoothingQuality = 'high';
+    g.drawImage(cur, 0, 0, n.width, n.height);
+    cur = n;
+  }
+  const out = canvas(w, h, null);
+  const g = out.getContext('2d'); g.imageSmoothingQuality = 'high';
+  g.drawImage(cur, 0, 0, w, h);
+  return out;
+}
+
+// Area-averaged lightness grid W x H of a square image (Rec. 709 luma of the sRGB values).
+function lightGrid(src, W, H) {
+  const S = src.width;
+  const d = src.getContext('2d').getImageData(0, 0, S, S).data;
+  const L = new Float32Array(W * H);
+  for (let gy = 0; gy < H; gy++) {
+    const y0 = Math.floor(gy * S / H), y1 = Math.floor((gy + 1) * S / H);
+    for (let gx = 0; gx < W; gx++) {
+      const x0 = Math.floor(gx * S / W), x1 = Math.floor((gx + 1) * S / W);
+      let s = 0, n = 0;
+      for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+        const i = (y * S + x) * 4;
+        s += 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2]; n++;
+      }
+      L[gy * W + gx] = s / n / 255;
+    }
+  }
+  // auto levels: stretch the 1st..99th percentile to 0..1 (what the app's auto tone starts from)
+  const sorted = Float32Array.from(L).sort();
+  const lo = sorted[Math.floor(L.length * 0.01)], hi = sorted[Math.ceil(L.length * 0.99) - 1];
+  for (let i = 0; i < L.length; i++) L[i] = Math.min(1, Math.max(0, (L[i] - lo) / Math.max(1e-3, hi - lo)));
+  return L;
+}
+
+function atkinson(L, W, H) {
+  const e = Float32Array.from(L), ink = new Uint8Array(W * H);
+  const add = (x, y, v) => { if (x >= 0 && x < W && y < H) e[y * W + x] += v; };
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const i = y * W + x, v = e[i], o = v < 0.5 ? 0 : 1;
+    ink[i] = o ? 0 : 1;
+    const err = (v - o) / 8;
+    add(x + 1, y, err); add(x + 2, y, err); add(x - 1, y + 1, err); add(x, y + 1, err); add(x + 1, y + 1, err); add(x, y + 2, err);
+  }
+  return ink;
+}
+const threshold = (L) => Uint8Array.from(L, v => (v < 0.5 ? 1 : 0));
+
+function dots(g, ink, W, H, ox, oy, P) {
+  const cw = P / W, ch = P / H;
+  g.fillStyle = '#fbfaf7'; g.fillRect(ox, oy, P, P);
+  g.fillStyle = '#17171a';
+  const r = 0.42 * Math.min(cw, ch);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    if (!ink[y * W + x]) continue;
+    g.beginPath(); g.arc(ox + (x + 0.5) * cw, oy + (y + 0.5) * ch, r, 0, 7); g.fill();
+  }
+}
+
+function greyBlocks(g, L, W, H, ox, oy, P) {
+  const cw = P / W, ch = P / H;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const v = Math.round(L[y * W + x] * 255);
+    g.fillStyle = `rgb(${v},${v},${v})`;
+    g.fillRect(ox + Math.floor(x * cw), oy + Math.floor(y * ch), Math.ceil(cw), Math.ceil(ch));
+  }
+}
+
+async function source(id) {
+  if ((q.get('src') || 'baked') === 'gen') return renderSample(id, 1024);
+  const bmp = await loadSample(id);
+  const c = canvas(bmp.width, bmp.height, null);
+  c.getContext('2d').drawImage(bmp, 0, 0);
+  bmp.close();
+  return c;
+}
+
+async function run() {
+  const report = {};
+  if (mode === 'sheet') {
+    const size = +(q.get('size') || 512);
+    const S = canvas(ids.length * size, size + 20);
+    const g = S.getContext('2d');
+    for (const [i, id] of ids.entries()) {
+      g.drawImage(await renderSample(id, size), i * size, 0);
+      label(g, `${id}  ${JSON.stringify(timings[id])}`, i * size + 6, size + 15);
+    }
+    report.timings = timings;
+    report.file = await savePng(S, q.get('shot') || 'sample_sheet');
+  } else if (mode === 'one') {
+    const id = q.get('id') || 'portrait';
+    const size = +(q.get('size') || 1024);
+    const view = q.get('view') ? q.get('view').split(',').map(Number) : [];
+    const img = await renderSample(id, size, { view });
+    let out = img;
+    if (q.get('crop')) {
+      const [x, y, w] = q.get('crop').split(',').map(Number);
+      const z = +(q.get('zoom') || 2);
+      out = canvas(w * z, w * z, null);
+      const g = out.getContext('2d'); g.imageSmoothingEnabled = false;
+      g.drawImage(img, x, y, w, w, 0, 0, w * z, w * z);
+    }
+    report.timings = timings;
+    report.file = await savePng(out, q.get('shot') || `sample_one_${id}`);
+  } else if (mode === 'bake') {
+    report.files = {};
+    for (const id of ids) {
+      const t0 = performance.now();
+      const img = await renderSample(id, 1024);
+      const jpg = await toBlob(img, 'image/jpeg', +(q.get('q') || 0.9));
+      const thumb = await toBlob(scaleTo(img, 160, 160), 'image/jpeg', 0.85);
+      const a = await saveFile(jpg, `sample_bake_${id}.jpg`);
+      const b = await saveFile(thumb, `sample_bake_${id}-thumb.jpg`);
+      report.files[id] = { kb: +(a.bytes / 1024).toFixed(1), thumbKb: +(b.bytes / 1024).toFixed(1),
+        ms: Math.round(performance.now() - t0), ...timings[id] };
+    }
+  } else if (mode === 'small') {
+    const W = 56, H = 64, P = 448, LAB = 20;
+    const all = canvas(P * 4, ids.length * (P + LAB));
+    const ga = all.getContext('2d');
+    report.ink = {};
+    for (const [row, id] of ids.entries()) {
+      const img = await source(id);
+      const L = lightGrid(img, W, H);
+      const at = atkinson(L, W, H), th = threshold(L);
+      const one = canvas(P * 4, P + LAB);
+      const g = one.getContext('2d');
+      g.drawImage(img, 0, 0, P, P);
+      greyBlocks(g, L, W, H, P, 0, P);
+      dots(g, at, W, H, 2 * P, 0, P);
+      dots(g, th, W, H, 3 * P, 0, P);
+      const names = [`${id} (${img.width}px)`, `grey ${W}x${H} auto levels`, 'Atkinson dots', 'threshold 0.5 dots'];
+      names.forEach((t, i) => label(g, t, i * P + 6, P + 15));
+      await savePng(one, `sample_small_${id}`);
+      ga.drawImage(one, 0, row * (P + LAB));
+      report.ink[id] = +(at.reduce((a, b) => a + b, 0) / at.length).toFixed(3);
+    }
+    report.file = await savePng(all, 'sample_small_all');
+  } else if (mode === 'test') {
+    // js/samples.js contract: order, ImageBitmap at 1024, thumbnails at 160, unknown ids rejected
+    const results = [];
+    const ok = (name, cond, extra = '') => { results.push({ name, pass: !!cond, extra }); };
+    ok('order', SAMPLES.map(s => s.id).join() === 'portrait,pet,landmark,logo', SAMPLES.map(s => s.id).join());
+    ok('fields', SAMPLES.every(s => s.name && s.alt && s.alt.length > 20));
+    for (const s of SAMPLES) {
+      const t0 = performance.now();
+      const bmp = await loadSample(s.id);
+      const ms = Math.round(performance.now() - t0);
+      ok(`load ${s.id}`, bmp instanceof ImageBitmap && bmp.width === 1024 && bmp.height === 1024, `${bmp.width}x${bmp.height} ${ms}ms`);
+      bmp.close();
+      const im = new Image(); im.src = thumbUrl(s.id); await im.decode();
+      ok(`thumb ${s.id}`, im.naturalWidth === 160 && im.naturalHeight === 160, `${im.naturalWidth}x${im.naturalHeight}`);
+    }
+    let threw = false;
+    try { await loadSample('nope'); } catch { threw = true; }
+    ok('unknown id rejects', threw);
+    report.results = results;
+    report.passed = results.filter(r => r.pass).length;
+    report.failed = results.filter(r => !r.pass).length;
+    if (report.failed) throw new Error('loader tests failed: ' + JSON.stringify(results.filter(r => !r.pass)));
+  }
+  log(JSON.stringify(report, null, 1));
+  window.__done = { ok: true, ...report };
+}
+
+run().catch(e => { log('ERROR ' + (e.stack || e)); window.__done = { ok: false, error: String(e && e.message || e) }; });
+</script>
+</body>
+</html>

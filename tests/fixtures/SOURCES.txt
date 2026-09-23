@@ -1,0 +1,1 @@
+photo_hopper.jpg: Rear Admiral Grace Hopper, official U.S. Navy photograph (public domain), as shipped in matplotlib sample_data.

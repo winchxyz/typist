@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Typist - glyph shape vectors</title>
+<style>
+  body { margin: 16px; font: 13px/1.4 system-ui, sans-serif; background: #f4f3ef; color: #17171a; }
+  pre { font-size: 12px; white-space: pre-wrap; }
+  canvas { display: block; margin: 12px 0; background: #fff; }
+</style>
+</head>
+<body>
+<h1>Glyph shape vectors</h1>
+<p>Renders the 94 ASCII glyphs from one installed monospace font, measures the six sampling circles
+of <code>js/ascii.js</code> and coverage, and saves <code>shots/shape-vectors.js</code> (copy it to
+<code>js/shape-vectors.js</code>) plus <code>shots/ascii_glyphs.png</code>.
+Query: <code>?font=Lucida%20Console</code> forces a font; <code>save=0</code> skips saving.</p>
+<pre id="log"></pre>
+<script type="module" src="./shapes.js"></script>
+</body>
+</html>

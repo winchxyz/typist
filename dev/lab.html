@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Typist lab</title>
+<style>
+  body { margin: 16px; background: #eceae4; color: #17171a; font: 13px/1.4 system-ui, sans-serif; }
+  canvas { display: block; margin: 0 0 24px; max-width: 100%; }
+  table { border-collapse: collapse; font: 12px/1.3 ui-monospace, Consolas, monospace; background: #fff; }
+  td, th { border: 1px solid #ccc; padding: 3px 8px; text-align: right; }
+  th:first-child, td:first-child { text-align: left; }
+  .over { background: #ffd9d4; }
+  pre { font-size: 11px; }
+</style>
+</head>
+<body>
+<!-- Contact sheets for the converter + formatters + raster (one page, three sheets):
+       node tests/shoot.mjs "/dev/lab.html?sheet=modes"     -> shots/lab_modes.png (+ lab_modes_<id>.png)
+       node tests/shoot.mjs "/dev/lab.html?sheet=targets"   -> shots/lab_targets.png (+ lab_targets_<id>.png)
+       node tests/shoot.mjs "/dev/lab.html?sheet=perf;tag=_t4" --throttle 4 -> shots/lab_perf_<engine><tag>.json
+     Query: w=40 (columns for modes), pw=320 (panel px), save=0 (no files), n=12 (perf iterations). -->
+<div id="out"></div>
+<pre id="log"></pre>
+<script type="module" src="./lab.js"></script>
+</body>
+</html>

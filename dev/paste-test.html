@@ -1,0 +1,21 @@
+<!doctype html>
+<!--
+  Typist real-device paste test kit.
+  Open on a phone, tap Copy on a card, paste into Instagram / X / Telegram, write what you saw.
+  Results stay in this browser (localStorage); "Copy my results" at the bottom gathers them as text.
+  Payloads are built by the app's own modules (targets.js, links.js, convert.js, samples.js), so the
+  kit tests exactly what the app ships. ?bake=1 writes a self-contained copy to shots/paste-test.html.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Typist paste test</title>
+<link rel="stylesheet" href="paste-test.css">
+</head>
+<body>
+<div id="app"><p class="boot">Building payloads&hellip;</p></div>
+<script type="module" src="paste-test.js"></script>
+</body>
+</html>

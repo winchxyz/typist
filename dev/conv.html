@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Typist converter check</title>
+<style>
+  body { margin: 16px; background: #fff; color: #17171a; font: 13px/1.4 system-ui, sans-serif; }
+  canvas { display: block; margin: 0 0 24px; max-width: 100%; }
+  pre { font-size: 11px; }
+</style>
+</head>
+<body>
+<!-- Visual check for the converter: node tests/shoot.mjs "/dev/conv.html" [--browser firefox|webkit]
+     Query: fx=portrait_exif6.jpg (one fixture), save=0 (no shots). Writes shots/conv_<fixture>[_<engine>].png -->
+<div id="out"></div>
+<pre id="log"></pre>
+<script type="module" src="./conv.js"></script>
+</body>
+</html>
