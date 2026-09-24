@@ -3,7 +3,8 @@
 </h1>
 
 <p align="center">
-  Turn any photo into text art you can paste into an Instagram comment, an X post, a Telegram message or a Reddit post.
+  Turn any photo into text art you can paste into an Instagram comment, an X post, a Telegram message, a Reddit post,
+  a Steam profile, a YouTube comment or a Twitch chat.
 </p>
 
 <p align="center">
@@ -35,12 +36,17 @@ photo never leaves your device.
   <img src="docs/app-phone.png" alt="The app on a phone in dark mode, three times: an Instagram comment, an X Premium long post with its Show more fold, and a Telegram message, each holding the halo figure in Braille dots." width="880">
 </p>
 
+<p align="center">
+  <img src="docs/app-chats.png" alt="The app on a phone in dark mode, three more times: a Steam profile Custom Info Box 60 by 32, a YouTube live chat message 17 by 10, and a Twitch chat message 30 by 15, each holding the halo figure in Braille dots." width="880">
+</p>
+
 ## Features
 
 - **Made for where it goes.** Instagram comment, X post (free, 280) or X long post (Premium,
-  25,000), Telegram message, Telegram channel post or photo caption, Reddit post or comment, or a
-  file. The target sets the
-  style, the width and the character budget, and the art resizes to the largest grid that fits.
+  25,000), Telegram message, Telegram channel post or photo caption, Reddit post or comment, Steam
+  comment, profile summary or Custom Info Box, YouTube comment or live chat, Twitch chat, or a
+  file. Pick the app, then where on it (the strip above the preview). The place sets the style, the
+  width and the character budget, and the art resizes to the largest grid that fits.
 - **Five looks:** Photo, Texture, Sketch, Soft and Poster, shown as thumbnails of your own photo at
   the size you are making.
 - **Three styles:** Dots (Braille), Letters (shape-matched ASCII) and Blocks (colour).
@@ -51,11 +57,13 @@ photo never leaves your device.
   Android, Windows), light and dark. Rows that would wrap are marked where they break.
 - **One button per place:** Copy for Instagram; Post on X (opens the X composer with the art filled
   in and puts it on your clipboard too); Copy for X for a Premium long post; Copy for Telegram or
-  for the channel; Copy for Reddit (a code block, for the rich-text editor and for Markdown mode). On Telegram, Share opens the share sheet
-  on a phone, and on desktop Open hands short art to Telegram through a t.me link.
+  for the channel; Copy for Reddit (a code block, for the rich-text editor and for Markdown mode);
+  Copy for Steam or for your profile; Copy for YouTube or for live chat; Copy for Twitch. On
+  Telegram, Share opens the share sheet on a phone, and on desktop Open hands short art to Telegram
+  through a t.me link.
 - **A PNG button on every target** (2× or 4×; on a phone it goes through the share sheet, so it can
   land in Photos). The File target adds SVG, HTML (colour blocks keep their colours) and .txt.
-- Undo and redo; drop or paste a photo anywhere; desktop keys: C copy, 1 to 6 targets, [ and ]
+- Undo and redo; drop or paste a photo anywhere; desktop keys: C copy, 1 to 8 apps, [ and ]
   width, I invert, F crop, S PNG.
 
 <p align="center">
@@ -82,6 +90,12 @@ text colour of the app it lands in.
 | Telegram message | 4,096 | UTF-16 code units | Dots, or Letters in a code block | 24 × 14 Dots on a phone. Letters only line up inside a code block: 32 wide on a phone, 72 on desktop. |
 | Telegram channel | 4,096, photo caption 1,024 | UTF-16 code units | Dots, or Letters in a code block | 27 × 16 Dots (447 characters) fit a text post and a photo caption. |
 | Reddit post or comment | 10,000 in a comment, 40,000 in a post | UTF-16 code units, the indents included | Dots, or Letters, both in a code block | Reddit joins single lines into one paragraph, so the art goes in as a code block. The clipboard carries it twice: indented 4 spaces (a Markdown code block, for Markdown mode, old.reddit and the apps) and as HTML `<pre><code>`, which reddit.com's rich-text editor turns into a code block. 35 × 19 Dots or 43 × 19 Letters fit a 390 px phone; wider art scrolls sideways. |
+| Steam comment | 1,000 | UTF-8 bytes: a Braille character takes 3, a line break 1 | Dots | 25 × 13 (987 bytes). Steam has no code blocks and collapses runs of spaces, so Letters do not line up there. |
+| Steam profile summary | 4,000 | UTF-8 bytes | Dots | 48 × 26 (3,769 bytes). Steam cuts off text past the limit when you save. |
+| Steam Custom Info Box | 8,000 | UTF-8 bytes | Dots | 60 wide, the width of the showcase: 60 × 32 is 5,791 bytes. |
+| YouTube comment | 10,000 | UTF-16 code units | Dots | 30 × 16 on a 390 px phone. YouTube screens comments for ASCII-art spam and may hold one for review; long ones fold behind "Read more". |
+| YouTube live chat | 200 | UTF-16 code units | Dots, as one line | 17 × 10 (197 characters). Lines up in chats 166 to 335 px wide; the desktop chat is about 330. Creators can hold messages for review. |
+| Twitch chat | 500 | UTF-16 code units | Dots, as one line | 30 × 15 (495 characters). Lines up in chats 293 to 588 px wide: the default desktop chat and phones. Twitch refuses the same message twice within 30 seconds, and some channels time out chat art. |
 | File | none | | Dots, Letters, Blocks | PNG, SVG, HTML, .txt |
 
 **Why the blanks are U+2800.** Instagram and X set text in proportional fonts, where a space and a
@@ -91,16 +105,23 @@ narrower, and apps trim spaces at line ends and drop empty lines. So every row h
 of cells, no line starts or ends with a space, line breaks are LF only, and there is no trailing
 newline.
 
+**Stream chats.** Twitch and YouTube live chat send a message on Enter, so it cannot hold line
+breaks. Typist joins the rows with single spaces instead: each row is one unbroken word of Braille,
+and a blank row goes first to take the username's line. The chat's own word wrap then puts every row
+on a line of its own, as long as one row fits the chat and two rows plus a space do not. The preview
+runs that wrap and names the chat widths that line up.
+
 **Windows.** Windows draws Braille with Segoe UI Symbol, which makes the blank cell U+2800 narrower
 than a dotted one (0.651 em against 0.753 em). Rows with blanks shift left, so Dots slant in
-Telegram Desktop and in X or Instagram in a Windows browser. It is the font, not the text: the
-characters are intact, and phones use other Braille fonts. Two fixes in the app: set Blank cells
-to **Windows-safe** (U+2840, a faint dot in each blank cell keeps the rows straight), or on
-Telegram use **Letters**, which sit in a code block and line up exactly on Windows. The Windows
-preview shows the slant as it will look.
+Telegram Desktop and in any Windows browser: X, Instagram, Reddit, YouTube, Twitch and the Steam
+client. In a stream chat the narrower rows can also end up two to a line. It is the font, not the
+text: the characters are intact, and phones use other Braille fonts. Two fixes in the app: set
+Blank cells to **Windows-safe** (U+2840, a faint dot in each blank cell keeps the rows straight),
+or on Telegram and Reddit use **Letters**, which sit in a code block and line up exactly on
+Windows. The Windows preview shows the slant as it will look.
 
 <p align="center">
-  <img src="docs/app-desktop.png" alt="The desktop app in dark mode: the Instagram comment preview in light and dark side by side, with targets, looks and size on the right." width="880">
+  <img src="docs/app-desktop.png" alt="The desktop app in dark mode: the Instagram comment preview in light and dark side by side, with the eight apps, looks and size on the right." width="880">
 </p>
 
 ## How it works
@@ -117,8 +138,9 @@ preview shows the slant as it will look.
    [ASCII characters are not pixels](https://alexharri.com/blog/ascii-rendering). Blocks: quadrant
    blocks with a foreground and a background colour.
 4. **Format.** The grid becomes the exact text for the target: U+2800 blanks, equal rows, LF only,
-   NFC, a code fence for Telegram letters. It is counted the platform's way: UTF-16 units for
-   Instagram and Telegram, and a tested reimplementation of twitter-text's weighted count for X.
+   NFC, a code fence for Telegram letters, a code block for Reddit, one line for a stream chat. It
+   is counted the platform's way: UTF-16 units for most, UTF-8 bytes for Steam, and a tested
+   reimplementation of twitter-text's weighted count for X.
 5. **Preview and copy.** The preview draws that text with the target device's cell sizes, so what
    fits in the preview fits on the phone. Copy puts the same text on the clipboard.
 

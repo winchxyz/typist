@@ -3,6 +3,7 @@
 import assert from 'node:assert/strict';
 import {
   TARGETS, FIT, PHONES, formatFor, autoFit, countFor, maxCols, rowsFor, cellAspect, limitFor, modeAllowed,
+  chatWidth, flowRange, unitOf,
 } from '../js/targets.js';
 import { xWeightedLength } from '../js/count.js';
 
@@ -296,6 +297,105 @@ test('property: 3,000 random grids x targets x options obey every rule and count
     n++;
   }
   assert.equal(n, 3000);
+});
+
+// ---------------------------------------------------------------- Steam, YouTube, Twitch
+const bytes = s => Buffer.byteLength(s, 'utf8');
+
+test('Steam counts UTF-8 bytes: a Braille cell is 3, a line break 1; countFor agrees', () => {
+  const r = rng(41);
+  for (const id of ['steamc', 'steamp', 'steamb']) {
+    assert.equal(unitOf(id), 'bytes');
+    for (let i = 0; i < 40; i++) {
+      const cols = 1 + ((r() * 70) | 0), rows = 1 + ((r() * 40) | 0);
+      const g = grid('braille', cols, rows, () => (r() < 0.3 ? B : B + ((r() * 256) | 0)));
+      const res = formatFor(id, g, { phone: 'desktop' });
+      assert.equal(res.count, bytes(res.text), `${id} ${cols}x${rows}`);
+      assert.equal(res.count, 3 * cols * rows + rows - 1);
+      assert.equal(countFor(id, 'braille', cols, rows), res.count);
+      assert.equal(res.fits, res.count <= res.limit);
+      assert.ok(res.warnings.some(w => w.code === 'steam-bytes'));
+    }
+  }
+  assert.deepEqual([limitFor('steamc'), limitFor('steamp'), limitFor('steamb')], [1000, 4000, 8000]);
+});
+
+test('Steam on a desktop: comment 25 x 13 (987 bytes), summary 48 wide, info box 60 wide', () => {
+  const at = id => autoFit(id, 'braille', { phone: 'desktop' });
+  assert.deepEqual(at('steamc'), { cols: 25, rows: 13 });
+  assert.equal(countFor('steamc', 'braille', 25, 13), 987);
+  assert.equal(at('steamp').cols, 48);
+  assert.equal(at('steamb').cols, 60);
+  for (const id of ['steamp', 'steamb']) {
+    const { cols, rows } = at(id);
+    assert.ok(countFor(id, 'braille', cols, rows) <= limitFor(id), id);
+  }
+});
+
+test('YouTube comment: plain Braille rows, 10,000 characters, a spam-review note', () => {
+  const g = grid('braille', 30, 16, (x, y) => B + ((x * 7 + y * 3) % 256));
+  const res = formatFor('ytc', g);
+  assert.equal(lines(res.text).length, 16);
+  assert.equal(res.count, res.text.length);
+  assert.equal(res.limit, 10000);
+  assert.ok(res.warnings.some(w => w.code === 'yt-review'));
+  assert.equal(res.html, null);
+});
+
+test('single-line chats: one line, a blank lead-in row, then the rows joined by single spaces', () => {
+  const r = rng(43);
+  for (const id of ['twitch', 'ytlive']) for (const blank of ['u2800', 'dot']) for (let i = 0; i < 30; i++) {
+    const cols = 1 + ((r() * 40) | 0), rows = 1 + ((r() * 20) | 0);
+    const g = grid('braille', cols, rows, () => (r() < 0.4 ? B : B + ((r() * 256) | 0)));
+    const res = formatFor(id, g, { blank });
+    assert.ok(!res.text.includes('\n'), `${id}: no line breaks`);
+    const words = res.text.split(' ');
+    assert.equal(words.length, rows + 1);
+    assert.equal(words[0], String.fromCodePoint(blank === 'dot' ? 0x2840 : B).repeat(cols), 'blank lead-in row');
+    for (let y = 0; y < rows; y++) {
+      const w = cps(words[y + 1]);
+      assert.equal(w.length, cols);
+      for (let x = 0; x < cols; x++) {
+        let want = g.cp[y * cols + x];
+        if (want === B && blank === 'dot') want = 0x2840;
+        assert.equal(w[x], want);
+      }
+    }
+    assert.equal(res.count, res.text.length);
+    assert.equal(countFor(id, 'braille', cols, rows), res.count, `${id} ${cols}x${rows}`);
+    assert.equal(res.fits, res.count <= res.limit);
+  }
+});
+
+test('chat budgets: Twitch 30 x 15 in 500 characters, YouTube live chat 17 x 10 in 200', () => {
+  assert.deepEqual(autoFit('twitch', 'braille', {}), { cols: 30, rows: 15 });
+  assert.equal(countFor('twitch', 'braille', 30, 15), 495);
+  assert.deepEqual(autoFit('ytlive', 'braille', {}), { cols: 17, rows: 10 });
+  assert.equal(countFor('ytlive', 'braille', 17, 10), 197);
+  assert.ok(countFor('ytlive', 'braille', 18, 10) > 200);
+});
+
+test('flowRange: a row fits the chat and two rows plus a space do not; narrow art warns', () => {
+  for (const id of ['twitch', 'ytlive']) {
+    const f = FIT[id].braille, cw = f.fontPx * f.cellEm, sp = f.fontPx * f.spaceEm;
+    for (const cols of [8, 17, 30]) {
+      const { min, max } = flowRange(id, 'braille', cols);
+      assert.equal(min, Math.ceil(cols * cw));
+      assert.equal(max, Math.floor(2 * cols * cw + sp));
+    }
+    // the desktop chat column sits inside the range for the default size
+    const { cols, rows } = autoFit(id, 'braille', {});
+    const range = flowRange(id, 'braille', cols), desk = chatWidth(id, 'braille', 'desktop');
+    assert.ok(range.min <= desk && desk < range.max, `${id}: ${range.min}-${range.max} vs ${desk}`);
+    const res = formatFor(id, grid('braille', cols, rows, () => B + 1));
+    assert.ok(res.warnings.some(w => w.code === 'flow-width'));
+    assert.ok(!res.warnings.some(w => w.code === 'flow-narrow'));
+    // art too narrow for the desktop chat: two rows would share a line
+    const narrow = formatFor(id, grid('braille', 10, 5, () => B + 1));
+    assert.ok(narrow.warnings.some(w => w.code === 'flow-narrow'), `${id}: flow-narrow`);
+  }
+  assert.ok(formatFor('twitch', grid('braille', 4, 2, () => B + 1)).warnings.some(w => w.code === 'twitch-duplicate'));
+  assert.ok(formatFor('ytlive', grid('braille', 4, 2, () => B + 1)).warnings.some(w => w.code === 'yt-hold'));
 });
 
 console.log(results.join('\n'));

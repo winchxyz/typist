@@ -12,7 +12,7 @@
 //
 // Everything above renderPreview() is pure (node tests: tests/preview.test.mjs).
 
-import { FIT } from './targets.js';
+import { FIT, TARGETS } from './targets.js';
 import { brailleGeometry, drawGrid } from './raster.js';
 
 /** Segoe UI Symbol (every Windows app): U+2800 is 0.651 em wide, every dot pattern 0.753 em. */
@@ -50,7 +50,7 @@ export function textWidth(target, mode, phone = 390) {
   if (target === 'plain') return Infinity;
   const f = fitOf(target, mode);
   const cw = f.fontPx * f.cellEm;
-  if (phone === 'desktop') return (f.desktop + 0.5) * cw;
+  if (phone === 'desktop') return f.chatDesktop != null ? f.chatDesktop : (f.desktop + 0.5) * cw;
   if (f.cols && f.cols[phone]) return (f.cols[phone] + 0.5) * cw;
   const [scale, minus] = f.text;
   return scale * phone - minus;
@@ -127,6 +127,59 @@ export function layoutArt(rows, mode, m, maxW) {
 }
 
 /**
+ * Single-line chats (Twitch, YouTube live chat) have no line breaks: the message is one paragraph,
+ * the rows are words (unbroken runs of Braille) joined by single spaces, and the chat's word wrap
+ * decides where each one lands. Lay that out like the chat does, greedy, first line after the
+ * username (`firstIndent`). A row wider than the chat itself breaks inside (overflow-wrap), which
+ * destroys the art: it is split like wrapRow and reported in wrappedRows.
+ *   -> the layoutArt shape, plus per-line `line` / `x0`, `lineCount` and `stacked` (every row on a
+ *      line of its own, the only case where the art survives)
+ */
+export function layoutFlow(rows, mode, m, { chatW, firstIndent = 0, spaceW = 0 } = {}) {
+  const lines = [], rowLine = [], rowSpan = [], wrappedRows = [];
+  let line = 0, x = firstIndent, right = 0, stacked = true;
+  const onLine = new Map();
+  rows.forEach((cells, r) => {
+    const widths = cellWidths(cells, m);
+    let w = 0;
+    for (const v of widths) w += v;
+    if (x > 0 && x + w > chatW + EPS) { line++; x = 0; }
+    if (w > chatW + EPS) {
+      // too wide even alone: the chat breaks the word at its edge
+      const parts = wrapRow(cells, widths, chatW, false);
+      if (x > 0) { line++; x = 0; }
+      rowLine.push(line); rowSpan.push(parts.length); wrappedRows.push(r);
+      for (const pt of parts) { lines.push({ row: r, ...pt, line, x0: 0 }); right = Math.max(right, pt.width); line++; }
+      line--; x = parts[parts.length - 1].width + spaceW;
+      stacked = false;
+      return;
+    }
+    const xs = new Float64Array(cells.length);
+    let ax = 0;
+    for (let k = 0; k < cells.length; k++) { xs[k] = ax; ax += widths[k]; }
+    lines.push({ row: r, start: 0, end: cells.length, xs, width: w, line, x0: x });
+    rowLine.push(line); rowSpan.push(1);
+    onLine.set(line, (onLine.get(line) || 0) + 1);
+    right = Math.max(right, x + w);
+    x += w + spaceW;
+  });
+  for (const n of onLine.values()) if (n > 1) stacked = false;
+  const lineCount = rows.length ? line + 1 : 0;
+  return { lines, rowLine, rowSpan, wrappedRows, width: Math.min(Math.max(right, 1), chatW), height: lineCount * m.cellH,
+           cellW: m.cellW, cellH: m.cellH, lineCount, stacked };
+}
+
+/**
+ * The chat widths in which rows of these widths stack one per line: a row must fit (width >= the
+ * widest row) and two rows plus a space must not (width < narrowest + space + narrowest).
+ */
+export function flowRange(rowWidths, spaceW) {
+  if (!rowWidths.length) return { min: 0, max: Infinity };
+  const widest = Math.max(...rowWidths), narrowest = Math.min(...rowWidths);
+  return { min: widest, max: rowWidths.length > 1 ? 2 * narrowest + spaceW : Infinity };
+}
+
+/**
  * Windows shear per row: how far the row's first dot sits left of where a phone draws it
  * (0 or negative px), = -(blanks before it) x (dot width - blank width). Rows without dots: 0.
  */
@@ -138,7 +191,10 @@ export function shearOffsets(rows, m) {
   });
 }
 
-/** The art rows exactly as pasted (fence stripped) as code point arrays. */
+/**
+ * The art rows exactly as pasted (fence stripped) as code point arrays. A single-line chat's
+ * message is one line of words: each word is a row, the blank lead-in first.
+ */
 export function payloadRows(payload, grid) {
   let mode = (payload && payload.mode) || (grid && grid.mode) || 'braille';
   let rows;
@@ -146,7 +202,8 @@ export function payloadRows(payload, grid) {
     let body = payload.text;
     if (mode === 'ascii') body = body.replace(/^```\n/, '').replace(/\n```$/, '');
     if (payload.target === 'reddit') body = body.split('\n').map(l => l.replace(/^ {4}/, '')).join('\n');
-    rows = body.split('\n').map(l => Array.from(l, ch => ch.codePointAt(0)));
+    const flow = !!(TARGETS[payload.target] && TARGETS[payload.target].flow);
+    rows = body.split(flow ? ' ' : '\n').map(l => Array.from(l, ch => ch.codePointAt(0)));
   } else if (grid) {
     rows = [];
     for (let r = 0; r < grid.rows; r++) rows.push(Array.from(grid.cp.subarray(r * grid.cols, (r + 1) * grid.cols)));
@@ -156,7 +213,9 @@ export function payloadRows(payload, grid) {
 
 const PLACE = {
   ig: 'an Instagram comment', x: 'an X post', xlong: 'an X long post', tg: 'a Telegram message',
-  tgc: 'a Telegram channel post', plain: 'a text file',
+  tgc: 'a Telegram channel post', plain: 'a text file', reddit: 'a Reddit comment', ytc: 'a YouTube comment',
+  steamc: 'a Steam comment', steamp: 'a Steam profile summary', steamb: 'a Steam Custom Info Box',
+  ytlive: 'YouTube live chat', twitch: 'Twitch chat',
 };
 export function ariaLabel(target, cols, rows, { caption = false, wrapped = 0, phone = 390 } = {}) {
   const place = target === 'tgc' && caption ? 'a Telegram photo caption' : PLACE[target] || 'a post';
@@ -195,7 +254,20 @@ PAL.rd = {
   dark: { bg: '#0d1113', head: '#0d1113', text: '#eaf0f2', muted: '#8a9ba3', line: '#232b2f', accent: '#7ab0ff',
           avatar: '#2f3a3f', glyph: '#9aa8ae', code: '#1b2226' },
 };
-const FAMILY = { ig: 'ig', x: 'x', xlong: 'x', tg: 'tg', tgc: 'tg', plain: 'plain', reddit: 'rd' };
+PAL.yt = {
+  light: { bg: '#ffffff', head: '#ffffff', text: '#0f0f0f', muted: '#606060', line: '#e5e5e5', accent: '#1a63d8', avatar: '#d9d9d9', glyph: '#ffffff' },
+  dark: { bg: '#0f0f0f', head: '#0f0f0f', text: '#f1f1f1', muted: '#aaaaaa', line: '#272727', accent: '#6db3ff', avatar: '#3f3f3f', glyph: '#aaaaaa' },
+};
+// Steam has no light mode: both themes show its dark slate
+const STEAM = { bg: '#1b1f25', head: '#171a1f', text: '#c6d0db', muted: '#7d8894', line: '#2a3038', accent: '#8fc4e8',
+                avatar: '#39424d', glyph: '#9aa6b2', card: '#232830' };
+PAL.steam = { light: STEAM, dark: STEAM };
+PAL.chat = {
+  light: { bg: '#f7f7f8', head: '#ffffff', text: '#0e0e10', muted: '#53535f', line: '#e3e3e8', accent: '#6b3fd1', avatar: '#dcdce1', glyph: '#ffffff' },
+  dark: { bg: '#18181b', head: '#1f1f23', text: '#efeff1', muted: '#adadb8', line: '#2c2c31', accent: '#b294ff', avatar: '#3a3a3d', glyph: '#adadb8' },
+};
+const FAMILY = { ig: 'ig', x: 'x', xlong: 'x', tg: 'tg', tgc: 'tg', plain: 'plain', reddit: 'rd', ytc: 'yt',
+                 steamc: 'steam', steamp: 'steam', steamb: 'steam', ytlive: 'chat', twitch: 'chat' };
 const BAD = { light: { band: 'rgba(209,31,31,.14)', pill: '#d11f1f', pillText: '#ffffff' },
               dark: { band: 'rgba(255,123,112,.16)', pill: '#ff7b70', pillText: '#2a0c09' } };
 const FONTS = {
@@ -247,6 +319,24 @@ const CSS = `
 
 .pv-ig .pv-head{height:58px;justify-content:center;padding-top:6px}
 .pv-ig .pv-titles{align-items:center;text-align:center}
+.pv-ytrow{position:relative;display:grid;grid-template-columns:36px auto;column-gap:12px;padding:14px 16px 8px}
+.pv-ytrow .pv-av{width:36px;height:36px}
+.pv-ytname{display:flex;gap:6px;align-items:baseline;font-size:12.5px;line-height:18px;margin-bottom:4px}
+.pv-ytname b{font-weight:500}
+.pv-ytacts{display:flex;align-items:center;gap:18px;height:34px;margin-top:4px;font-size:12px;font-weight:500;color:var(--pv-muted)}
+.pv-ytacts span{display:inline-flex;align-items:center;gap:6px}
+.pv-ytacts svg{width:16px;height:16px}
+.pv-stbox{margin:12px;padding:10px 12px 12px;border-radius:4px;background:var(--pv-card)}
+.pv-stname{display:flex;align-items:center;gap:8px;font-size:12.5px;line-height:18px;margin-bottom:8px}
+.pv-stname i{flex:none;width:28px;height:28px;border-radius:3px;background:var(--pv-avatar)}
+.pv-stname b{font-weight:600;color:var(--pv-accent)}
+.pv-stlabel{font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--pv-muted);margin-bottom:8px}
+.pv-chat{display:flex;flex-direction:column;gap:6px;padding:10px 10px 12px}
+.pv-chatmsg{font-size:13px;line-height:20px}
+.pv-chatmsg b{font-weight:700;color:var(--pv-accent)}
+.pv-chatart{position:relative}
+.pv-chatname{position:absolute;left:0;top:0;z-index:2;font-weight:700;font-size:13px;color:var(--pv-accent);white-space:nowrap}
+.pv-flowcap{margin-top:6px;font-size:11.5px;line-height:16px;color:var(--pv-muted)}
 .pv-rdrow{position:relative;padding:12px 14px 10px 14px}
 .pv-rdname{display:flex;align-items:center;gap:7px;font-size:12.5px;line-height:18px;margin-bottom:8px}
 .pv-rdname .pv-av{width:24px;height:24px}
@@ -345,6 +435,8 @@ const ICON = {
   more: '<circle cx="5.5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="18.5" cy="12" r="1.3"/>',
   checks: '<path d="M2.5 12.5l3.8 3.8L14 8.5"/><path d="M10.8 15.8l.9.8L19.5 8.5"/>',
   up: '<path d="M12 4.5l6.5 7.5h-4v7h-5v-7h-4z"/>',
+  thumb: '<path d="M7.5 10.5v9h-3v-9zM7.5 10.5l3.6-6.2c1.2 0 2.1 1 1.9 2.2l-.6 3.4h5.3c1.1 0 1.9 1 1.7 2.1l-1.2 6.2c-.2.8-.9 1.3-1.7 1.3H7.5"/>',
+  thumbdown: '<path d="M16.5 13.5v-9h3v9zM16.5 13.5l-3.6 6.2c-1.2 0-2.1-1-1.9-2.2l.6-3.4H6.3c-1.1 0-1.9-1-1.7-2.1l1.2-6.2c.2-.8.9-1.3 1.7-1.3h8.9"/>',
   down: '<path d="M12 19.5l6.5-7.5h-4v-7h-5v7h-4z"/>',
   eye: '<path d="M2.5 12S6 6.5 12 6.5 21.5 12 21.5 12 18 17.5 12 17.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.7"/>',
   image: '<rect x="3.5" y="4.5" width="17" height="15" rx="3"/><path d="M3.8 16.5l4.7-4.7 4 4 2.8-2.8 4.9 4.9"/><circle cx="15.5" cy="9.3" r="1.5"/>',
@@ -357,6 +449,16 @@ function el(doc, tag, cls, html) {
   if (cls) e.className = cls;
   if (html != null) e.innerHTML = html;
   return e;
+}
+
+function measureText(doc, font, text) {
+  try {
+    const ctx = doc.createElement('canvas').getContext('2d');
+    ctx.font = font;
+    const w = ctx.measureText(text).width;
+    if (w > 0) return w;
+  } catch { /* no canvas */ }
+  return text.length * 7.6;
 }
 
 function header(doc, { title, sub, back = true, center = false, avatar = null }) {
@@ -378,6 +480,12 @@ const TITLES = {
   tgc: { title: 'Your channel', sub: 'Telegram channel · 1,204 subscribers' },
   plain: { title: 'Text file', sub: '' },
   reddit: { title: 'Comments', sub: 'Reddit' },
+  ytc: { title: 'Comments', sub: 'YouTube' },
+  steamc: { title: 'Comments', sub: 'Steam' },
+  steamp: { title: 'Profile', sub: 'Steam · summary' },
+  steamb: { title: 'Profile', sub: 'Steam · Custom Info Box' },
+  ytlive: { title: 'Live chat', sub: 'YouTube' },
+  twitch: { title: 'Stream chat', sub: 'Twitch' },
 };
 
 /**
@@ -402,12 +510,12 @@ function paintArt(canvas, lay, rows, mode, ink, dpr, { family = MONO, fadeFrom =
       ctx.fillStyle = ink;
       ctx.beginPath();
       for (let li = from; li < to; li++) {
-        const L = lay.lines[li], cells = rows[L.row], y = li * cellH;
+        const L = lay.lines[li], cells = rows[L.row], y = (L.line ?? li) * cellH, x0 = L.x0 || 0;
         for (let k = L.start; k < L.end; k++) {
           const v = cells[k];
           const bits = v > 0x2800 && v <= 0x28ff ? v - 0x2800 : 0;
           if (!bits) continue;
-          const ox = L.xs[k - L.start];
+          const ox = x0 + L.xs[k - L.start];
           for (let b = 0; b < 8; b++) {
             if (!((bits >> b) & 1)) continue;
             const cx = ox + centers[b][0], cy = y + centers[b][1];
@@ -437,7 +545,7 @@ function paintArt(canvas, lay, rows, mode, ink, dpr, { family = MONO, fadeFrom =
       bg = grid.bg ? grid.bg.subarray(o + L.start, o + L.end) : null;
     }
     ctx.globalAlpha = li >= fadeFrom ? fadeAlpha : 1;
-    drawGrid(ctx, { mode, cols: n, rows: 1, cp, fg, bg }, { x: L.xs[0], y: li * cellH, cellW, cellH, ink, font: family });
+    drawGrid(ctx, { mode, cols: n, rows: 1, cp, fg, bg }, { x: (L.x0 || 0) + L.xs[0], y: (L.line ?? li) * cellH, cellW, cellH, ink, font: family });
   });
   ctx.globalAlpha = 1;
 }
@@ -457,14 +565,25 @@ export function renderPreview(host, {
   injectStyle(doc);
   const { mode, rows } = payloadRows(payload, grid);
   let m = cellMetrics(target, mode, device);
-  const maxW = textWidth(target, mode, phone);
-  let lay = layoutArt(rows, mode, m, maxW);
+  const flow = !!(TARGETS[target] && TARGETS[target].flow);
+  // a stream chat on Windows is the desktop chat column
+  const maxW = textWidth(target, mode, flow && device === 'windows' ? 'desktop' : phone);
+  let lay, flowInfo = null;
+  if (flow) {
+    const f = FIT[target] && FIT[target][mode] ? FIT[target][mode] : {};
+    const spaceW = (f.spaceEm || 0.27) * m.fontPx;
+    const nameW = measureText(doc, `700 ${m.fontPx}px ${FONTS[device] || FONTS.ios}`, target === 'twitch' ? 'you:' : 'you');
+    lay = layoutFlow(rows, mode, m, { chatW: maxW, firstIndent: nameW + spaceW, spaceW });
+    const widths = rows.map(cells => { let w = 0; for (const v of cellWidths(cells, m)) w += v; return w; });
+    flowInfo = { chatW: maxW, range: flowRange(widths, spaceW) };
+    lay.width = maxW;
+  } else lay = layoutArt(rows, mode, m, maxW);
   // Too wide for the screen: reflowed rows turn the art into a wall of broken lines nobody can
   // judge. By default the art stays whole, scaled into the column, with the screen's edge drawn
   // where the rows would break and the part past it tinted ('edge'); 'wrap' shows the reflow.
   const wrappedRows = lay.wrappedRows;
   let edge = null;
-  if (wrappedRows.length && target !== 'plain' && wrapView !== 'wrap') {
+  if (!flow && wrappedRows.length && target !== 'plain' && wrapView !== 'wrap') {
     const full = layoutArt(rows, mode, m, Infinity);
     const s = Math.min(1, maxW / full.width);
     m = { ...m, cellW: m.cellW * s, cellH: m.cellH * s, blankW: m.blankW * s };
@@ -496,6 +615,7 @@ export function renderPreview(host, {
     '--pv-avatar': pal.avatar || pal.line, '--pv-glyph': pal.glyph || pal.muted, '--pv-bubble': pal.bubble || pal.bg,
     '--pv-meta': pal.meta || pal.muted, '--pv-card': pal.card || pal.bg, '--pv-cardmeta': pal.cardMeta || pal.muted,
     '--pv-pre': pal.pre || 'transparent', '--pv-prebar': pal.preBar || pal.accent, '--pv-code': pal.code || 'transparent',
+    '--pv-accent': pal.accent,
     '--pv-band': bad.band, '--pv-pill': bad.pill, '--pv-pill-text': bad.pillText,
     '--pv-font': FONTS[device] || FONTS.ios, '--pv-r': (RADIUS[device] ?? 18) + 'px',
     '--pv-edge': theme === 'dark' ? 'rgba(255,255,255,.08)' : 'rgba(0,0,0,.08)',
@@ -513,7 +633,7 @@ export function renderPreview(host, {
   wrap.appendChild(art);
   const colW = Number.isFinite(maxW) ? maxW : lay.width;
   // IG and X lay text in a full-width column; bubbles and cards shrink to the art
-  if (fam === 'ig' || fam === 'x') wrap.style.width = colW + 'px';
+  if (fam === 'ig' || fam === 'x' || fam === 'yt' || fam === 'steam') wrap.style.width = colW + 'px';
   else wrap.style.width = Math.ceil(lay.width) + 'px';
   if (edge) {
     // the screen's edge: every row that runs past it breaks there on the real screen
@@ -531,6 +651,17 @@ export function renderPreview(host, {
     line.setAttribute('aria-hidden', 'true');
     line.appendChild(el(doc, 'span')).textContent = phone === 'desktop' ? 'window edge' : 'screen edge';
     wrap.appendChild(line);
+  }
+  if (flow && !lay.stacked) {
+    const perLine = new Map();
+    for (const L of lay.lines) perLine.set(L.line, (perLine.get(L.line) || 0) + 1);
+    for (const [line, n] of perLine) {
+      if (n < 2) continue;
+      const band = el(doc, 'div', 'pv-band');
+      band.style.top = (line * m.cellH + 1) + 'px'; band.style.height = (m.cellH - 2) + 'px';
+      band.setAttribute('aria-hidden', 'true');
+      wrap.appendChild(band);
+    }
   }
   for (const r of edge ? [] : lay.wrappedRows) {
     const top = lay.rowLine[r] * m.cellH, h = lay.rowSpan[r] * m.cellH;
@@ -670,6 +801,48 @@ export function renderPreview(host, {
       body.appendChild(bubble);
     }
     screen.appendChild(body);
+  } else if (fam === 'yt') {
+    head(header(doc, { ...t, center: true }));
+    const row = el(doc, 'div', 'pv-ytrow');
+    row.appendChild(avatar(36));
+    const col = el(doc, 'div', 'pv-col');
+    col.appendChild(el(doc, 'div', 'pv-ytname', '<b>@you</b><span class="pv-muted">1 minute ago</span>'));
+    col.appendChild(wrap);
+    col.appendChild(el(doc, 'div', 'pv-ytacts', `<span>${svg('thumb')}1</span><span>${svg('thumbdown')}</span><span>Reply</span>`));
+    row.appendChild(col);
+    if (chipEl) row.appendChild(chipEl);
+    screen.appendChild(row);
+  } else if (fam === 'steam') {
+    head(header(doc, { ...t, center: true }));
+    const box = el(doc, 'div', 'pv-stbox');
+    if (target === 'steamc') box.appendChild(el(doc, 'div', 'pv-stname', '<i></i><b>you</b><span class="pv-muted">Just now</span>'));
+    else box.appendChild(el(doc, 'div', 'pv-stlabel')).textContent = target === 'steamb' ? 'Custom Info Box' : 'Summary';
+    box.appendChild(wrap);
+    if (chipEl) { box.style.position = 'relative'; box.appendChild(chipEl); }
+    screen.appendChild(box);
+  } else if (fam === 'chat') {
+    head(header(doc, { ...t, center: true }));
+    const body = el(doc, 'div', 'pv-chat');
+    const colon = target === 'twitch' ? ':' : '';
+    for (const [n, msg] of [['nightowl', 'that jump was clean'], ['mira_k', 'gg'], ['pixelfox', 'art incoming?']]) {
+      const line = el(doc, 'div', 'pv-chatmsg');
+      line.appendChild(el(doc, 'b')).textContent = n + colon;
+      line.appendChild(doc.createTextNode(' ' + msg));
+      body.appendChild(line);
+    }
+    const msg = el(doc, 'div', 'pv-chatart');
+    msg.style.width = Math.round(flowInfo.chatW) + 'px';
+    const name = el(doc, 'b', 'pv-chatname');
+    name.textContent = 'you' + colon;
+    name.style.lineHeight = m.cellH + 'px';
+    msg.append(name, wrap);
+    body.appendChild(msg);
+    const r = flowInfo.range;
+    body.appendChild(el(doc, 'div', 'pv-flowcap')).textContent = Number.isFinite(r.max)
+      ? `Lines up in chats ${Math.ceil(r.min)}–${Math.floor(r.max)} px wide · this chat is ${Math.round(flowInfo.chatW)} px`
+      : `This chat is ${Math.round(flowInfo.chatW)} px wide`;
+    if (chipEl) { msg.appendChild(chipEl); }
+    screen.appendChild(body);
   } else if (fam === 'rd') {
     head(header(doc, { ...t, center: true }));
     const row = el(doc, 'div', 'pv-rdrow');
@@ -706,6 +879,6 @@ export function renderPreview(host, {
 
   return { wrappedRows, cellW: m.cellW, cellH: m.cellH, lines: lay.lines.length,
            width: lay.width, height: lay.height, shear: m.shear, textWidth: maxW, screenWidth: screenW,
-           edge: edge ? edge.x : null };
+           edge: edge ? edge.x : null, stacked: flow ? lay.stacked : null, flowRange: flowInfo ? flowInfo.range : null };
 }
 

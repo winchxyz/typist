@@ -6,12 +6,14 @@
 <!-- The README images, drawn from the real modules (convert.js, tone.js LOOKS, raster.js, targets.js)
      with the showcase artwork img/showcase/halo.jpg:
        node tests/shoot.mjs "/dev/readme-art.html?shot=banner" --w 1800 --h 900   -> shots/readme_banner.png
-       ?shot=banner|looks|styles|phones|desktop|paste|explore|all
+       ?shot=banner|looks|styles|phones|chats|desktop|paste|explore|all
        ;look=texture ;cols=64 (banner)  ;dcols=46 ;acols=56 ;alook=poster ;slook=texture (styles)  ;tag=_v2
-     phones / desktop frame real app screenshots, shots/readme_app_phone_dark_<ig|xlong|tg>.png and
-     shots/readme_app_desktop_dark.png, taken first with Playwright (same setup as tests/app-shot.mjs).
+     phones / chats / desktop frame real app screenshots, shots/readme_app_phone_dark_<ig|xlong|tg>.png,
+     shots/readme_app_phone_dark_<steamb|ytlive|twitch>.png and shots/readme_app_desktop_dark.png, taken
+     first with node tests/readme-app-shot.mjs.
      Each shots/readme_<name>.png is then written to docs/<name>.png as a 256-colour palette PNG
-     (PIL quantize, fast octree, no dither); app_phone and app_desktop become app-phone / app-desktop. -->
+     (PIL quantize, fast octree, no dither); app_phone, app_chats and app_desktop become app-phone,
+     app-chats and app-desktop. -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&display=swap">

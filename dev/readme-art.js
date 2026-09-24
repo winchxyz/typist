@@ -1,9 +1,10 @@
 // README images from the real modules: every dot, letter and block below is Typist output for the
 // showcase artwork (img/showcase/halo.jpg), through createConverter().run exactly as the app calls it.
 //   node tests/shoot.mjs "/dev/readme-art.html?shot=banner"   -> shots/readme_banner.png
-//   ?shot=banner|looks|styles|phones|desktop|paste|explore|all   ;look=texture   ;cols=64 (banner)
+//   ?shot=banner|looks|styles|phones|chats|desktop|paste|explore|all   ;look=texture   ;cols=64 (banner)
 //   ;dcols=46 ;acols=56 ;alook=poster ;slook=texture (styles)   ;tag=_v2   (docs/ steps: readme-art.html)
-// phones / desktop compose the app screenshots shots/readme_app_*.png (made with Playwright first).
+// phones / chats / desktop compose the app screenshots shots/readme_app_*.png (made first with
+// node tests/readme-app-shot.mjs).
 // The pasted text is monochrome (it takes the colour of the app it lands in); where dots or letters
 // are coloured here, the colour is the photo's own colour at that dot, sampled from the image.
 import { createConverter, gridLines } from '../js/convert.js';
@@ -336,13 +337,24 @@ function framed(ctx, img, x, y, w, h, r) {
   ctx.restore();
 }
 
-async function phones() {
-  const theme = q.get('theme') || 'dark';
-  const items = [
+const PHONE_ROWS = {
+  app_phone: [
     { file: 'ig', name: 'Instagram', sub: 'a comment · 26 × 15 · 404 of 2,200' },
     { file: 'xlong', name: 'X Premium', sub: 'a long post · folds after 5 rows' },
     { file: 'tg', name: 'Telegram', sub: 'a message · 24 × 14 · 349 of 4,096' },
-  ];
+  ],
+  app_chats: [
+    { file: 'steamb', name: 'Steam', sub: 'a profile Info Box · 60 × 32 · 5,791 of 8,000 bytes' },
+    { file: 'ytlive', name: 'YouTube', sub: 'live chat · 17 × 10 · 197 of 200' },
+    { file: 'twitch', name: 'Twitch', sub: 'chat · 30 × 15 · 495 of 500' },
+  ],
+};
+const phones = () => phoneRow('app_phone');
+const chats = () => phoneRow('app_chats');
+
+async function phoneRow(name) {
+  const theme = q.get('theme') || 'dark';
+  const items = PHONE_ROWS[name];
   const imgs = await Promise.all(items.map(it => load(`../shots/readme_app_phone_${theme}_${it.file}.png`)));
   const Wc = 1760, pw = 480, ph = Math.round(pw * imgs[0].height / imgs[0].width), GAP = 64, TOP = 72;
   const left = (Wc - 3 * pw - 2 * GAP) / 2;
@@ -360,7 +372,7 @@ async function phones() {
     ctx.font = `400 21px ${SANS}`;
     ctx.fillText(it.sub, x + 8, TOP + ph + 102);
   });
-  return save('app_phone', cv);
+  return save(name, cv);
 }
 
 async function desktop() {
@@ -396,8 +408,8 @@ try {
   await Promise.all([`italic 100px ${SERIF}`, `100px ${SERIF}`, `400 20px ${SANS}`, `500 20px ${SANS}`, `20px ${MONO}`]
     .map(f => document.fonts.load(f).catch(() => null)));
   const bmp = await load(SRC);
-  const want = SHOT === 'all' ? ['banner', 'looks', 'styles', 'phones', 'desktop'] : SHOT.split(',');
-  const jobs = { banner, looks, styles, paste, explore, phones, desktop };
+  const want = SHOT === 'all' ? ['banner', 'looks', 'styles', 'phones', 'chats', 'desktop'] : SHOT.split(',');
+  const jobs = { banner, looks, styles, paste, explore, phones, chats, desktop };
   const out = [];
   for (const k of want) out.push(await jobs[k](bmp));
   window.__done = { ok: true, out, fonts: document.fonts.check(`italic 40px ${SERIF}`) && document.fonts.check(`20px ${MONO}`) };

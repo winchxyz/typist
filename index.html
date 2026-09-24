@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Typist: any photo, in text</title>
-<meta name="description" content="Turn any photo into text art (Braille dots, ASCII letters or blocks) that pastes cleanly into an Instagram comment, an X post, a Telegram message or a Reddit post. Runs in your browser; your photo is never uploaded.">
+<meta name="description" content="Turn any photo into text art (Braille dots, ASCII letters or blocks) that pastes cleanly into Instagram, X, Telegram, Reddit, Steam, YouTube and Twitch. Runs in your browser; your photo is never uploaded.">
 <meta name="theme-color" content="#e7e3dc" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#161514" media="(prefers-color-scheme: dark)">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
@@ -74,11 +74,8 @@
   <nav class="targets" id="targetRow" role="radiogroup" aria-label="Where will you paste it?"></nav>
 
   <main class="stage" id="stage">
-    <div class="xplan" id="xPlan" hidden>
-      <div class="seg" id="xPlanSeg" role="radiogroup" aria-label="Your X account">
-        <button type="button" role="radio" data-v="post">Free<small>280 characters</small></button>
-        <button type="button" role="radio" data-v="long">Premium<small>25,000 characters</small></button>
-      </div>
+    <div class="vstrip" id="variantStrip" hidden>
+      <div class="seg" id="stripSeg" role="radiogroup" aria-label="Where on this app"></div>
     </div>
     <div class="preview-bar" id="previewBar">
       <div class="pv-left">

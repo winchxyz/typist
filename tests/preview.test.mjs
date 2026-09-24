@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { FIT, PHONES, maxCols, formatFor } from '../js/targets.js';
 import {
-  cellMetrics, textWidth, cellWidths, wrapRow, layoutArt, shearOffsets, payloadRows, ariaLabel,
+  cellMetrics, textWidth, cellWidths, wrapRow, layoutArt, layoutFlow, flowRange, shearOffsets, payloadRows, ariaLabel,
   WIN_BLANK_RATIO, IG_MORE_ROWS,
 } from '../js/preview.js';
 
@@ -170,11 +170,65 @@ test('payloadRows: fence stripped for Telegram ASCII, blank-dot cells kept as pa
   assert.deepEqual(payloadRows(null, b).rows[0], [B, FULL, B]);
 });
 
+// ---------------------------------------------------------------- single-line chats
+test('layoutFlow: rows stack one per line iff a row fits and two rows plus a space do not', () => {
+  const m = cellMetrics('twitch', 'braille');
+  const sp = 3.5, rw = 10 * m.cellW;
+  const rows = [row(10, () => B), ...Array.from({ length: 4 }, () => row(10, () => FULL))];
+  for (const chatW of [rw - 1, rw, rw + 40, 2 * rw + sp - 0.01, 2 * rw + sp + 0.01, 3 * rw]) {
+    const lay = layoutFlow(rows, 'braille', m, { chatW, firstIndent: 0, spaceW: sp });
+    const range = flowRange(rows.map(r => r.length * m.cellW), sp);
+    const inRange = chatW >= range.min - 1e-9 && chatW < range.max;
+    assert.equal(lay.stacked, inRange, `chatW ${chatW}`);
+    if (lay.stacked) {
+      assert.equal(lay.lineCount, rows.length);
+      assert.ok(lay.lines.every((L, i) => L.line === i && L.x0 === 0));
+    }
+  }
+});
+
+test('layoutFlow: the username pushes the lead-in; the art starts on a line of its own', () => {
+  const m = cellMetrics('twitch', 'braille');
+  const rows = [row(30, () => B), row(30, () => FULL), row(30, () => FULL)];
+  const chatW = 320, sp = 3.51;
+  // short name: the lead-in shares the name's line, the rows follow one per line
+  let lay = layoutFlow(rows, 'braille', m, { chatW, firstIndent: 20, spaceW: sp });
+  assert.deepEqual(lay.lines.map(L => [L.line, L.x0]), [[0, 20], [1, 0], [2, 0]]);
+  // long name: the lead-in drops to line 1, the art still starts at x = 0
+  lay = layoutFlow(rows, 'braille', m, { chatW, firstIndent: 60, spaceW: sp });
+  assert.deepEqual(lay.lines.map(L => [L.line, L.x0]), [[1, 0], [2, 0], [3, 0]]);
+  assert.equal(lay.lineCount, 4);
+  assert.equal(lay.height, 4 * m.cellH);
+  assert.ok(lay.stacked);
+});
+
+test('layoutFlow: a row wider than the chat breaks inside and is reported', () => {
+  const m = cellMetrics('ytlive', 'braille');
+  const rows = [row(40, () => B), row(40, () => FULL)];
+  const lay = layoutFlow(rows, 'braille', m, { chatW: 200, firstIndent: 0, spaceW: 3 });
+  assert.deepEqual(lay.wrappedRows, [0, 1]);
+  assert.equal(lay.stacked, false);
+  assert.ok(lay.lines.every(L => L.width <= 200 + 1e-9));
+});
+
+test('payloadRows: a chat message splits on its spaces, the lead-in first', () => {
+  const g = grid('braille', 3, 2, (x, y) => (x === y ? FULL : B + 1));
+  for (const id of ['twitch', 'ytlive']) {
+    const { rows } = payloadRows(formatFor(id, g), g);
+    assert.equal(rows.length, 3);
+    assert.deepEqual(rows[0], [B, B, B]);
+    assert.deepEqual(rows[1], [FULL, B + 1, B + 1]);
+    assert.deepEqual(rows[2], [B + 1, FULL, B + 1]);
+  }
+});
+
 test('aria-label says size and place, never the characters', () => {
   assert.equal(ariaLabel('ig', 26, 15), 'Text art of your photo, 26 by 15 characters, for an Instagram comment');
   assert.equal(ariaLabel('tgc', 27, 16, { caption: true }), 'Text art of your photo, 27 by 16 characters, for a Telegram photo caption');
   assert.match(ariaLabel('x', 30, 17, { wrapped: 17, phone: 360 }), /17 rows wrap on a 360 px screen$/);
   assert.equal(IG_MORE_ROWS, 12);
+  assert.match(ariaLabel('twitch', 30, 15), /for Twitch chat$/);
+  assert.match(ariaLabel('steamb', 60, 32), /for a Steam Custom Info Box$/);
 });
 
 console.log(results.join('\n'));

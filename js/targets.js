@@ -12,7 +12,7 @@
 // Telegram turns a ``` fence into a monospace pre block that keeps spaces, the one place classic
 // ASCII lines up; only printable ASCII goes inside and never a backtick.
 
-import { utf16Length, xWeightedLength, findUrlsX, X_MAX } from './count.js';
+import { utf16Length, utf8Length, xWeightedLength, findUrlsX, X_MAX } from './count.js';
 
 export const PHONES = [360, 390, 430];
 
@@ -33,6 +33,25 @@ export const TARGETS = {
   // A comment takes 10,000 characters, a post 40,000; the smaller one is the budget.
   reddit: { id: 'reddit', name: 'Reddit post or comment', short: 'Reddit', limit: 10000, postLimit: 40000,
             counter: 'utf16', modes: ['braille', 'ascii'], defaultMode: 'braille', indent: 4 },
+  // YouTube comments and Steam text keep line breaks and use proportional fonts: Dots, like Instagram
+  ytc: { id: 'ytc', name: 'YouTube comment', short: 'YouTube', limit: 10000, counter: 'utf16',
+         modes: ['braille'], defaultMode: 'braille' },
+  // Steam counts UTF-8 bytes (a long-standing bug report): 1,000 bytes is ~333 Braille cells.
+  // Profile fields may count characters; bytes is the safe side. No [code] in any of them.
+  steamc: { id: 'steamc', name: 'Steam comment', short: 'Steam', limit: 1000, counter: 'utf8',
+            modes: ['braille'], defaultMode: 'braille' },
+  steamp: { id: 'steamp', name: 'Steam profile summary', short: 'Steam summary', limit: 4000, counter: 'utf8',
+            modes: ['braille'], defaultMode: 'braille' },
+  steamb: { id: 'steamb', name: 'Steam Custom Info Box', short: 'Steam info box', limit: 8000, counter: 'utf8',
+            modes: ['braille'], defaultMode: 'braille' },
+  // Single-line chats: Enter sends the message, so there are no line breaks. Each row is an unbroken
+  // run of Braille and the rows are joined by single spaces: the chat's own word wrap stacks them,
+  // as long as a row fits the chat and two rows do not (flowRange). A blank lead-in row goes
+  // first, so a short username can never pull the first row up onto its line.
+  ytlive: { id: 'ytlive', name: 'YouTube live chat', short: 'Live chat', limit: 200, counter: 'utf16',
+            modes: ['braille'], defaultMode: 'braille', flow: true },
+  twitch: { id: 'twitch', name: 'Twitch chat', short: 'Twitch', limit: 500, counter: 'utf16',
+            modes: ['braille'], defaultMode: 'braille', flow: true },
 };
 
 // How big a cell is on the target and how wide its text column is, per mode.
@@ -67,6 +86,16 @@ export const FIT = {
     braille: { fontPx: 13, cellEm: 0.75, lineEm: 1.35, text: [1, 48], desktop: 72 },
     ascii: { fontPx: 13, cellEm: 0.6, lineEm: 1.35, text: [1, 48], desktop: 96 },
   },
+  ytc: { braille: { fontPx: 14, cellEm: 0.75, lineEm: 1.43, text: [1, 72], desktop: 60 } },
+  // Steam is read on PCs: the desktop widths are the ones that count (the Info Box fits ~60 cells
+  // according to Steam's own guides; the summary and comments are narrower)
+  steamc: { braille: { fontPx: 13, cellEm: 0.753, lineEm: 1.4, text: [1, 40], desktop: 48 } },
+  steamp: { braille: { fontPx: 13, cellEm: 0.753, lineEm: 1.4, text: [1, 40], desktop: 48 } },
+  steamb: { braille: { fontPx: 13, cellEm: 0.753, lineEm: 1.4, text: [1, 40], desktop: 60 } },
+  // flow targets: `text` is the chat column on a phone, `chatDesktop` its width in the desktop
+  // chat (px); spaceEm: the width of the space that separates two rows
+  ytlive: { braille: { fontPx: 13, cellEm: 0.75, lineEm: 1.23, text: [1, 60], chatDesktop: 330, spaceEm: 0.27 } },
+  twitch: { braille: { fontPx: 13, cellEm: 0.75, lineEm: 1.54, text: [1, 20], chatDesktop: 320, spaceEm: 0.27 } },
 };
 
 const BLANK = 0x2800, BLANK_DOT = 0x2840;
@@ -86,7 +115,7 @@ const fencedAscii = (id, mode) => mode === 'ascii' && (id === 'tg' || id === 'tg
 
 export const modeAllowed = (id, mode) => target(id).modes.includes(mode);
 export const limitFor = (id, opts = {}) => (id === 'tgc' && opts.caption ? TARGETS.tgc.captionLimit : target(id).limit);
-export const unitOf = id => (target(id).counter === 'x' ? 'weighted' : 'utf16');
+export const unitOf = id => ({ x: 'weighted', utf8: 'bytes' }[target(id).counter] || 'utf16');
 
 /** Cell width / height as the target renders it. */
 export function cellAspect(id, mode) {
@@ -102,10 +131,29 @@ export function rowsFor(cols, aspect) {
 /** Widest grid that stays on one line per row. phone: 360 | 390 | 430 | 'desktop'. */
 export function maxCols(id, mode, { phone = 390 } = {}) {
   const f = fitOf(id, mode);
+  if (TARGETS[id] && TARGETS[id].flow) return Math.max(1, Math.floor(chatWidth(id, mode, phone) / (f.fontPx * f.cellEm)));
   if (phone === 'desktop') return f.desktop;
   if (f.cols && f.cols[phone]) return f.cols[phone];
   const [scale, minus] = f.text;
   return Math.max(1, Math.floor((scale * phone - minus) / (f.fontPx * f.cellEm)));
+}
+
+/** Width of a single-line chat's text column in CSS px (flow targets). */
+export function chatWidth(id, mode, phone = 390) {
+  const f = fitOf(id, mode);
+  if (phone === 'desktop') return f.chatDesktop;
+  const [scale, minus] = f.text;
+  return scale * phone - minus;
+}
+
+/**
+ * Chat widths (CSS px) in which `cols`-wide rows stack one per line: a row must fit (width >= a
+ * row) and two rows plus the space between them must not (width < two rows + a space).
+ */
+export function flowRange(id, mode, cols) {
+  const f = fitOf(id, mode);
+  const row = cols * f.fontPx * f.cellEm, space = f.fontPx * (f.spaceEm || 0.27);
+  return { min: Math.ceil(row), max: Math.floor(2 * row + space) };
 }
 
 /**
@@ -116,6 +164,10 @@ export function countFor(id, mode, cols, rows, opts = {}) {
   const t = target(id);
   const cells = cols * rows, breaks = Math.max(0, rows - 1);
   if (t.counter === 'x') return 2 * cells + breaks;
+  // UTF-8: every Braille cell (a blank too) is 3 bytes, a line break 1
+  if (t.counter === 'utf8') return 3 * cells + breaks;
+  // flow: a blank lead-in row and one space before every row
+  if (t.flow) return (rows + 1) * cols + rows;
   return cells + breaks + (fencedAscii(id, mode) ? 8 : 0) + (t.indent || 0) * rows;
 }
 
@@ -216,7 +268,9 @@ export function formatFor(id, grid, opts = {}) {
   const { lines, foreign } = mapRows(grid, cellFn);
 
   const pad = ' '.repeat(t.indent || 0);
-  const body = (pad ? lines.map(l => pad + l) : lines).join('\n');
+  const body = t.flow
+    ? [String.fromCodePoint(blank).repeat(cols), ...lines].join(' ')
+    : (pad ? lines.map(l => pad + l) : lines).join('\n');
   const text = (fenced ? '```\n' + body + '\n```' : body).normalize('NFC');
   // Reddit's rich-text editor ignores the Markdown indent (it keeps the spaces and sets the rows in
   // a proportional font) but turns pasted HTML <pre><code> into a code block: the clipboard carries
@@ -225,7 +279,7 @@ export function formatFor(id, grid, opts = {}) {
     : codeBlock ? '<pre><code>' + escapeHtml(lines.join('\n')) + '</code></pre>' : null;
 
   const limit = limitFor(id, opts);
-  const count = t.counter === 'x' ? xWeightedLength(text) : utf16Length(text);
+  const count = t.counter === 'x' ? xWeightedLength(text) : t.counter === 'utf8' ? utf8Length(text) : utf16Length(text);
   const fits = count <= limit;
   const over = Math.max(0, count - limit);
   const phone = opts.phone || 390;
@@ -266,6 +320,24 @@ export function formatFor(id, grid, opts = {}) {
     warnings.push({ code: 'fold', level: 'info', foldRow,
       message: `The timeline shows about ${foldRow} rows, then “Show more”.` });
   }
+  if (t.flow && cols && rows) {
+    const range = flowRange(id, mode, cols), desk = chatWidth(id, mode, 'desktop');
+    warnings.push({ code: 'flow-width', level: 'info', min: range.min, max: range.max,
+      message: `Lines up in chats ${range.min}–${range.max} px wide.` });
+    if (range.max <= desk) {
+      warnings.push({ code: 'flow-narrow', level: 'warn',
+        message: `In a ${desk} px chat two rows share a line: make the art wider.` });
+    }
+  }
+  // what each place does to art, from its own help pages and long-running reports
+  if (id === 'twitch') warnings.push({ code: 'twitch-duplicate', level: 'info',
+    message: 'Twitch refuses the same message twice within 30 seconds, and some channels time out chat art.' });
+  if (id === 'ytlive') warnings.push({ code: 'yt-hold', level: 'info',
+    message: 'Creators can hold chat messages for review, so a stream may not show it.' });
+  if (id === 'ytc') warnings.push({ code: 'yt-review', level: 'info',
+    message: 'YouTube checks comments for ASCII-art spam and may hold one for review. Long comments fold behind “Read more”.' });
+  if (t.counter === 'utf8') warnings.push({ code: 'steam-bytes', level: 'info',
+    message: 'Steam counts bytes: each Braille character takes 3. Text past the limit is cut off when you save.' });
   if (codeBlock) {
     warnings.push({ code: 'reddit-markdown', level: 'info',
       message: 'If Reddit shows the art as plain lines, select it and press Code block (or paste it again in Markdown mode).' });

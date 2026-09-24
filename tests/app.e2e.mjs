@@ -1,7 +1,7 @@
 // App end to end: the whole flow in the real index.html, driven like a person would.
 //   node tests/app.e2e.mjs [--browser chromium|firefox|webkit|all]
-// welcome -> target tile -> photo_hopper.jpg upload / a sample -> editor -> every target (auto-fit,
-// fit bars, primary label) -> Look thumbnails -> width stepper -> invert -> crop (drag, Done) ->
+// welcome -> target tile -> photo_hopper.jpg upload / a sample -> editor -> every app and every
+// variant on the strip (auto-fit, fit bars, primary label) -> Look thumbnails -> width stepper -> invert -> crop (drag, Done) ->
 // copy for each target (clipboard == payload) -> X intent popup -> downloads (.txt / PNG / SVG /
 // HTML, the PNG button on every target and mode) -> reload keeps the photo and the settings.
 // Clipboard: a spy records every write (ClipboardItem, writeText, execCommand) in every engine;
@@ -74,7 +74,8 @@ async function run(browserName) {
   await page.waitForFunction(() => window.__done, null, { timeout: 60000 });
   await page.waitForFunction(() => window.TY && window.TY.welcomeDone, null, { timeout: 20000 });
   check('welcome: sheet visible', await page.isVisible('#welcome'));
-  check('welcome: 6 target tiles (Reddit and File included) + 4 samples', (await page.locator('#welcomeTargets [data-v]').count()) === 6 && (await page.locator('#samples .sample').count()) === 4);
+  check('welcome: 8 app tiles (Reddit, Steam, YouTube, Twitch and File included) + 4 samples',
+    (await page.locator('#welcomeTargets [data-v]').count()) === 8 && (await page.locator('#samples .sample').count()) === 4);
   await page.click('#welcomeTargets [data-v="x"]');
   check('welcome: tile picks X', await TY(() => window.TY.state.target) === 'x');
   await page.click('#welcomeTargets [data-v="ig"]');
@@ -89,8 +90,9 @@ async function run(browserName) {
   check('upload: fit line says Fits (or the Windows slant note)', /Fits|Tight|Slants on Windows/.test(s.fit), s.fit);
 
   // ---------------------------------------------------------------- targets
-  const expectLabel = { ig: 'Copy for Instagram', x: 'Post on X', tg: 'Copy for Telegram', tgc: 'Copy for the channel', reddit: 'Copy for Reddit', file: 'Download' };
-  for (const t of ['x', 'tg', 'tgc', 'reddit', 'file', 'ig']) {
+  const expectLabel = { ig: 'Copy for Instagram', x: 'Post on X', tg: 'Copy for Telegram', reddit: 'Copy for Reddit', steam: 'Copy for Steam',
+    yt: 'Copy for YouTube', twitch: 'Copy for Twitch', file: 'Download' };
+  for (const t of ['x', 'tg', 'reddit', 'steam', 'yt', 'twitch', 'file', 'ig']) {
     await page.click(`#targetRow [data-v="${t}"]`);
     await settle();
     s = await TY(() => {
@@ -105,6 +107,29 @@ async function run(browserName) {
   }
   const bars = await TY(() => [...document.querySelectorAll('#targetRow [data-v]')].map(b => b.dataset.v + ':' + (b.className.match(/fit-\w+/) || [''])[0]));
   check('target chips: every chip has a fit bar class', bars.every(b => /fit-(ok|tight|bad|none)$/.test(b)), bars.join(' '));
+
+  // variants: the strip above the preview says where on the app
+  const variants = [['tg', 'channel', 'tgc', 'Copy for the channel'], ['steam', 'profile', 'steamp', 'Copy for your profile'],
+    ['steam', 'infobox', 'steamb', 'Copy for your profile'], ['yt', 'live', 'ytlive', 'Copy for live chat'], ['x', 'long', 'xlong', 'Copy for X']];
+  for (const [ui, v, id, label] of variants) {
+    await page.click(`#targetRow [data-v="${ui}"]`);
+    await page.click(`#stripSeg [data-v="${v}"]`);
+    await settle();
+    s = await TY(() => ({ id: TY.cur.r.id, fits: TY.payload.fits, wraps: TY.payload.wraps, auto: TY.cur.cols === TY.autoCols(TY.cur.r),
+      label: document.querySelector('#actionBar .btn.primary .lbl').textContent,
+      checked: document.querySelector('#stripSeg [aria-checked="true"]')?.dataset.v }));
+    check(`variant ${ui} / ${v}: ${id}, auto-fit, fits, "${label}"`, s.id === id && s.auto && s.fits && !s.wraps && s.label === label && s.checked === v, JSON.stringify(s));
+  }
+  for (const [ui, v] of [['tg', 'chat'], ['steam', 'comment'], ['yt', 'comment'], ['x', 'post']]) {
+    await page.click(`#targetRow [data-v="${ui}"]`);
+    await page.click(`#stripSeg [data-v="${v}"]`);
+  }
+  const single = [];
+  for (const ui of ['reddit', 'twitch', 'file', 'ig']) {
+    await page.click(`#targetRow [data-v="${ui}"]`);
+    single.push(await page.isVisible('#variantStrip'));
+  }
+  check('variants: no strip for apps with one place (Instagram, Reddit, Twitch, File)', single.every(v => !v), single.join(','));
 
   // ---------------------------------------------------------------- Look
   await page.click('#tab-look');
@@ -221,7 +246,8 @@ async function run(browserName) {
     await page.click('#styleSeg [data-v="ascii"]');
   }, undefined, { toast: /Paste it into any chat/ });
   check('telegram letters: payload is a ``` fence', await TY(() => TY.payload.text.startsWith('```\n') && TY.payload.text.endsWith('\n```')));
-  await copyCase('Channel', target('tgc'), undefined, { toast: /channel/ });
+  await copyCase('Channel', async () => { await page.click('#stripSeg [data-v="channel"]'); }, undefined, { toast: /channel/ });
+  await page.click('#stripSeg [data-v="chat"]');
   // Reddit: the art only survives in a Markdown code block, every row indented by 4 spaces
   await copyCase('Reddit (letters, code block)', target('reddit'), undefined, { toast: /code block/ });
   s = await TY(() => ({ mode: TY.payload.mode, lines: TY.payload.text.split('\n') }));
@@ -242,9 +268,31 @@ async function run(browserName) {
     const rows = TY.payload.text.split('\n').map(l => l.slice(4)).join('\n');
     return h.startsWith('<pre><code>') && h.endsWith('</code></pre>') && h.includes(rows.split('\n')[0]) && !/<pre><code> {4}/.test(h);
   }));
+  // Steam: rows of Braille, counted in UTF-8 bytes
+  await copyCase('Steam comment', target('steam'), undefined, { toast: /comment on a profile/ });
+  check('steam: one row per line, Braille only, the count is UTF-8 bytes', await TY(() => {
+    const t = TY.payload.text;
+    return TY.payload.unit === 'bytes' && TY.payload.count === new TextEncoder().encode(t).length && TY.payload.count <= 1000
+      && t.split('\n').length === TY.grid.rows && /^[\u2800-\u28ff\n]+$/.test(t);
+  }));
+  await copyCase('Steam summary', async () => { await page.click('#stripSeg [data-v="profile"]'); }, undefined, { toast: /Summary/ });
+  await page.click('#stripSeg [data-v="comment"]');
+  await copyCase('YouTube comment', target('yt'), undefined, { toast: /Paste it into a comment/ });
+  // single-line chats: one message, the chat's wrap stacks the rows
+  await copyCase('YouTube live chat', async () => { await page.click('#stripSeg [data-v="live"]'); }, undefined, { toast: /send it as it is/ });
+  check('youtube live chat: one line within 200 characters, the preview stacks the rows',
+    await TY(() => !TY.payload.text.includes('\n') && TY.payload.text.length <= 200 && TY.cur.pv.stacked === true));
+  await page.click('#stripSeg [data-v="comment"]');
+  await copyCase('Twitch', target('twitch'), undefined, { toast: /send it as it is/ });
+  s = await TY(() => ({ text: TY.payload.text, rows: TY.grid.rows, cols: TY.grid.cols, stacked: TY.cur.pv.stacked,
+    lines: document.querySelector('#pv0 .pv-art') ? Math.round(parseFloat(document.querySelector('#pv0 .pv-art').style.height) / TY.cur.pv.cellH) : 0 }));
+  const words = s.text.split(' ');
+  check('twitch: one line of rows + 1 Braille words (blank lead-in first), 500 characters at most',
+    !s.text.includes('\n') && s.text.length <= 500 && words.length === s.rows + 1 && /^\u2800+$/.test(words[0]) && words.every(w => [...w].length === s.cols), `${s.text.length} ${words.length}`);
+  check('twitch: the preview stacks every row on a line of its own', s.stacked === true && s.lines >= s.rows, JSON.stringify({ stacked: s.stacked, lines: s.lines }));
   await copyCase('X (Copy)', target('x'), '#actionBar .sec-btn', { toast: /new post/ });
-  await copyCase('X long', async () => { await page.click('#tab-size'); await page.click('#variantSeg [data-v="long"]'); }, undefined, { toast: /Premium/ });
-  await page.click('#variantSeg [data-v="post"]');
+  await copyCase('X long', async () => { await page.click('#stripSeg [data-v="long"]'); }, undefined, { toast: /Premium/ });
+  await page.click('#stripSeg [data-v="post"]');
   await settle();
 
   // ---------------------------------------------------------------- X intent
@@ -290,20 +338,28 @@ async function run(browserName) {
   if (d) check('download HTML: a page with the art', d.name.endsWith('.html') && /<pre/.test(d.buf.toString('utf8')), d.name);
 
   // the PNG button on every target and mode
-  const cases = [['ig', 'braille'], ['x', 'braille'], ['tg', 'braille'], ['tg', 'ascii'], ['tgc', 'braille'], ['reddit', 'braille'], ['reddit', 'ascii'], ['file', 'braille'], ['file', 'ascii'], ['file', 'blocks']];
-  for (const [t, mode] of cases) {
+  const cases = [['ig', null, 'braille'], ['x', 'post', 'braille'], ['tg', 'chat', 'braille'], ['tg', 'chat', 'ascii'], ['tg', 'channel', 'braille'],
+    ['reddit', null, 'braille'], ['reddit', null, 'ascii'], ['steam', 'comment', 'braille'], ['steam', 'infobox', 'braille'],
+    ['yt', 'comment', 'braille'], ['yt', 'live', 'braille'], ['twitch', null, 'braille'],
+    ['file', null, 'braille'], ['file', null, 'ascii'], ['file', null, 'blocks']];
+  for (const [t, v, mode] of cases) {
     await page.click(`#targetRow [data-v="${t}"]`);
+    if (v) await page.click(`#stripSeg [data-v="${v}"]`);
     await TY(m => { TY.state.mode = m; TY.state.cols = null; TY.render(); }, mode);
     await settle();
-    const gg = await TY(() => ({ cols: TY.grid.cols, rows: TY.grid.rows, mode: TY.grid.mode }));
-    d = await grab(() => page.click('#actionBar .png-btn'), `PNG ${t} ${mode}`);
+    const gg = await TY(() => ({ cols: TY.grid.cols, rows: TY.grid.rows, mode: TY.grid.mode, id: TY.cur.r.ui === 'file' ? 'file' : TY.cur.r.id }));
+    const what = `${t}${v ? ' ' + v : ''} ${mode}`;
+    d = await grab(() => page.click('#actionBar .png-btn'), `PNG ${what}`);
     if (d) {
       const p = pngOk(d, gg.cols, gg.rows);
-      const tname = t === 'file' ? 'file' : t;
-      check(`PNG button ${t} ${mode}: valid PNG named typist-${tname}-${gg.cols}x${gg.rows}.png`, p.ok && gg.mode === mode && d.name === `typist-${tname}-${gg.cols}x${gg.rows}.png`, `${d.name} ${p.w}x${p.h} ${gg.mode}`);
+      check(`PNG button ${what}: valid PNG named typist-${gg.id}-${gg.cols}x${gg.rows}.png`, p.ok && gg.mode === mode && d.name === `typist-${gg.id}-${gg.cols}x${gg.rows}.png`, `${d.name} ${p.w}x${p.h} ${gg.mode}`);
     }
   }
   await TY(() => { TY.state.mode = 'braille'; TY.render(); });
+  await page.click('#targetRow [data-v="tg"]');
+  await page.click('#stripSeg [data-v="chat"]');
+  await page.click('#targetRow [data-v="yt"]');
+  await page.click('#stripSeg [data-v="comment"]');
   await page.click('#targetRow [data-v="tg"]');
   await page.click('#tab-look');
   await page.click('#looks [data-v="poster"]');

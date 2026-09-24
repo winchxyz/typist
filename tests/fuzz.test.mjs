@@ -395,7 +395,9 @@ function xWeightRef(s) {
   return n;
 }
 const utf16Ref = s => s.length;
-const BRAILLE_TARGETS = ['ig', 'x', 'xlong', 'tg', 'tgc'];
+const utf8Ref = s => Buffer.byteLength(s, 'utf8');
+const BRAILLE_TARGETS = ['ig', 'x', 'xlong', 'tg', 'tgc', 'ytc', 'steamc', 'steamp', 'steamb'];
+const FLOW_TARGETS = ['twitch', 'ytlive'];
 
 /** Every platform rule for a payload; returns a list of violations (empty = clean). */
 function violations(text, { braille = false, fence = false, rows = null, blankDot = false } = {}) {
@@ -479,7 +481,8 @@ ftest('formatFor Braille targets: every hostile grid obeys every rule, counts ma
     try { res = T.formatFor(target, g, opts); } catch (e) { problems.push(`${target} ${name} threw ${e.message}`); continue; }
     const v = violations(res.text, { braille: true, rows: g.rows, blankDot: opts.blank === 'dot' });
     if (v.length) problems.push(`${target} ${name} ${JSON.stringify(opts)}: ${v.join('; ')}`);
-    const ref = target === 'x' || target === 'xlong' ? xWeightRef(res.text) : utf16Ref(res.text);
+    const ref = target === 'x' || target === 'xlong' ? xWeightRef(res.text)
+      : target.startsWith('steam') ? utf8Ref(res.text) : utf16Ref(res.text);
     if (res.count !== ref) problems.push(`${target} ${name}: count ${res.count} != independent ${ref}`);
     if (res.fits !== (res.count <= res.limit)) problems.push(`${target} ${name}: fits=${res.fits} but ${res.count}/${res.limit}`);
     if (res.cols !== g.cols || res.rows !== g.rows) problems.push(`${target} ${name}: reported ${res.cols}x${res.rows}`);
@@ -496,6 +499,27 @@ ftest('formatFor Braille targets: every hostile grid obeys every rule, counts ma
         if (row[c] && row[c].codePointAt(0) !== want) { problems.push(`${target} ${name}: art changed at ${c},${y}`); y = g.rows; break; }
       }
     }
+  }
+  assert.deepEqual(problems.slice(0, 20), []);
+});
+
+ftest('formatFor chats: every hostile grid is one line of equal Braille words, counts match', () => {
+  const problems = [];
+  for (const target of FLOW_TARGETS) for (const [name, g] of hostileBrailleGrids()) for (const opts of [{}, { blank: 'dot' }]) {
+    let res;
+    try { res = T.formatFor(target, g, opts); } catch (e) { problems.push(`${target} ${name} threw ${e.message}`); continue; }
+    const t = res.text;
+    if (/[\r\n]/.test(t)) problems.push(`${target} ${name}: line break in a chat message`);
+    if (/  |^ | $/.test(t)) problems.push(`${target} ${name}: double or edge space`);
+    if (t !== t.normalize('NFC')) problems.push(`${target} ${name}: not NFC`);
+    const words = t.split(' ');
+    if (words.length !== g.rows + 1) problems.push(`${target} ${name}: ${words.length} words for ${g.rows} rows`);
+    if (words.some(w => [...w].length !== g.cols || [...w].some(ch => ch.codePointAt(0) < 0x2800 || ch.codePointAt(0) > 0x28ff))) {
+      problems.push(`${target} ${name}: a word is not ${g.cols} Braille cells`);
+    }
+    if (res.count !== utf16Ref(t)) problems.push(`${target} ${name}: count ${res.count} != ${utf16Ref(t)}`);
+    if (T.countFor(target, 'braille', g.cols, g.rows, opts) !== res.count) problems.push(`${target} ${name}: countFor disagrees`);
+    if (res.fits !== (res.count <= res.limit)) problems.push(`${target} ${name}: fits flag`);
   }
   assert.deepEqual(problems.slice(0, 20), []);
 });

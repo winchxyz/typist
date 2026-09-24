@@ -9,7 +9,7 @@
 // export.js makes the files and crop.js is the crop screen.
 
 import { createConverter, LOOKS, TONE_DEFAULTS, CROP_DEFAULTS, DITHERS } from './convert.js';
-import { TARGETS, formatFor, autoFit, maxCols, rowsFor, cellAspect, modeAllowed, limitFor, countFor } from './targets.js';
+import { TARGETS, formatFor, autoFit, maxCols, rowsFor, cellAspect, modeAllowed, limitFor, countFor, unitOf } from './targets.js';
 import { SAMPLES, loadSample, thumbUrl } from './samples.js';
 import { decodeImage, fromDrawable, imageErrorMessage, autoCrop, encodeForStorage } from './imageio.js';
 import { drawGrid } from './raster.js';
@@ -35,17 +35,35 @@ const wide = mq('(min-width: 1024px)');
 const sideBySide = mq('(min-width: 1280px)');
 
 // ------------------------------------------------------------------------------------ targets
-// UI targets (chips) -> formatter targets: X splits into post / long post, File is 'plain'.
+// UI targets are apps (chips, cards, welcome tiles); an app with more than one place has variants,
+// picked with the switch above the preview. Each variant is one formatter target (targets.js).
 const UI_TARGETS = [
-  { id: 'ig', chip: 'Instagram', tile: 'Instagram comment', key: '1' },
-  { id: 'x', chip: 'X', tile: 'X post', key: '2' },
-  { id: 'tg', chip: 'Telegram', tile: 'Telegram', key: '3' },
-  { id: 'tgc', chip: 'Channel', tile: 'Telegram channel', key: '4' },
-  { id: 'reddit', chip: 'Reddit', tile: 'Reddit', key: '5' },
-  { id: 'file', chip: 'File', tile: 'File', key: '6' },
+  { id: 'ig', chip: 'Instagram', tile: 'Instagram', sub: 'Comments', key: '1' },
+  { id: 'x', chip: 'X', tile: 'X', sub: '280, or 25,000 with Premium', key: '2' },
+  { id: 'tg', chip: 'Telegram', tile: 'Telegram', sub: 'Chats and channels', key: '3' },
+  { id: 'reddit', chip: 'Reddit', tile: 'Reddit', sub: 'Posts and comments', key: '4' },
+  { id: 'steam', chip: 'Steam', tile: 'Steam', sub: 'Comments and profile', key: '5' },
+  { id: 'yt', chip: 'YouTube', tile: 'YouTube', sub: 'Comments and live chat', key: '6' },
+  { id: 'twitch', chip: 'Twitch', tile: 'Twitch', sub: 'Chat', key: '7' },
+  { id: 'file', chip: 'File', tile: 'Just a file', sub: 'PNG, SVG, HTML, text', key: '8' },
 ];
 const UI_IDS = new Set(UI_TARGETS.map(t => t.id));
-const PLACE = { ig: 'Instagram', x: 'X', xlong: 'X', tg: 'Telegram', tgc: 'Telegram channels', plain: 'files', reddit: 'Reddit' };
+const VARIANTS = {
+  x: [{ v: 'post', label: 'Free', id: 'x' }, { v: 'long', label: 'Premium', id: 'xlong' }],
+  tg: [{ v: 'chat', label: 'Chat', id: 'tg' }, { v: 'channel', label: 'Channel', id: 'tgc' },
+       { v: 'caption', label: 'Caption', id: 'tgc', caption: true }],
+  steam: [{ v: 'comment', label: 'Comment', id: 'steamc' }, { v: 'profile', label: 'Summary', id: 'steamp' },
+          { v: 'infobox', label: 'Info box', id: 'steamb' }],
+  yt: [{ v: 'comment', label: 'Comment', id: 'ytc' }, { v: 'live', label: 'Live chat', id: 'ytlive' }],
+};
+const SINGLE = { ig: 'ig', reddit: 'reddit', twitch: 'twitch', file: 'plain' };
+// old deep links and saved targets that became variants
+const LEGACY = { tgc: ['tg', 'channel'], xlong: ['x', 'long'], ytc: ['yt', 'comment'], ytlive: ['yt', 'live'],
+                 steamc: ['steam', 'comment'], steamp: ['steam', 'profile'], steamb: ['steam', 'infobox'] };
+const variantOf = ui => (VARIANTS[ui] ? VARIANTS[ui].find(v => v.v === state.targetOpts[ui]) || VARIANTS[ui][0] : null);
+const PLACE = { ig: 'Instagram', x: 'X', xlong: 'X', tg: 'Telegram', tgc: 'Telegram channels', plain: 'files', reddit: 'Reddit',
+                steamc: 'Steam', steamp: 'Steam profiles', steamb: 'Steam profiles', ytc: 'YouTube', ytlive: 'YouTube live chat', twitch: 'Twitch' };
+const isTg = r => r.id === 'tg' || r.id === 'tgc';
 // a file has no budget and no screen: these widths read well as an image or a .txt
 const FILE_COLS = { braille: 48, ascii: 72, blocks: 56 };
 const COLS_MIN = 4, COLS_MAX = 200;
@@ -67,7 +85,7 @@ const DEVICE_NAME = { ios: 'iPhone', android: 'Android', windows: 'Windows' };
 const DOC_KEYS = ['target', 'targetOpts', 'mode', 'look', 'dither', 'ascii', 'blocks', 'color', 'cols', 'blank', 'tone', 'crop'];
 const state = {
   target: 'ig',
-  targetOpts: { x: 'post', tg: 'phone', tgc: 'post' },
+  targetOpts: { x: 'post', tg: 'chat', tgScreen: 'phone', steam: 'comment', yt: 'comment' },
   mode: 'braille',          // preferred style; a target that cannot show it uses its default
   look: 'photo',
   dither: 'atkinson',
@@ -111,9 +129,20 @@ function cleanCrop(c) {
 const saved = loadSettings();
 if (saved && saved.state && typeof saved.state === 'object') {
   const s = saved.state;
-  state.target = pick(s.target, [...UI_IDS], 'ig');
   const to = s.targetOpts || {};
-  state.targetOpts = { x: pick(to.x, ['post', 'long'], 'post'), tg: pick(to.tg, ['phone', 'desktop'], 'phone'), tgc: pick(to.tgc, ['post', 'caption'], 'post') };
+  state.targetOpts = {
+    x: pick(to.x, ['post', 'long'], 'post'),
+    tg: pick(to.tg, ['chat', 'channel', 'caption'], 'chat'),
+    // before apps had variants, 'tg' held the screen and Channel was its own target
+    tgScreen: pick(to.tgScreen ?? to.tg, ['phone', 'desktop'], 'phone'),
+    steam: pick(to.steam, ['comment', 'profile', 'infobox'], 'comment'),
+    yt: pick(to.yt, ['comment', 'live'], 'comment'),
+  };
+  if (LEGACY[s.target]) {
+    const [app, v] = LEGACY[s.target];
+    state.target = app;
+    state.targetOpts[app] = s.target === 'tgc' && to.tgc === 'caption' ? 'caption' : v;
+  } else state.target = pick(s.target, [...UI_IDS], 'ig');
   state.mode = pick(s.mode, ['braille', 'ascii', 'blocks'], 'braille');
   state.look = pick(s.look, LOOKS.map(l => l.id), 'photo');
   state.dither = pick(s.dither, DITHERS, 'atkinson');
@@ -137,6 +166,7 @@ if (saved && saved.prefs && typeof saved.prefs === 'object') {
 }
 const forParam = new URLSearchParams(location.search).get('for');
 if (forParam && UI_IDS.has(forParam)) state.target = forParam;
+else if (forParam && LEGACY[forParam]) { state.target = LEGACY[forParam][0]; state.targetOpts[LEGACY[forParam][0]] = LEGACY[forParam][1]; }
 
 const snapshot = () => JSON.parse(JSON.stringify(Object.fromEntries(DOC_KEYS.map(k => [k, state[k]]))));
 function persist() {
@@ -173,14 +203,16 @@ function restore(snap) {
 /** The formatter's view of the current UI target. */
 function resolve(ui = state.target) {
   const to = state.targetOpts;
-  const id = ui === 'file' ? 'plain' : ui === 'x' && to.x === 'long' ? 'xlong' : ui;
+  const v = variantOf(ui);
+  const id = v ? v.id : SINGLE[ui] || ui;
   // Dots stay the default everywhere (the user's call): Letters of a photo are far weaker art.
   // On Telegram the fit line offers Letters in one tap, since Telegram Desktop slants Dots.
   const want = state.mode;
   const mode = modeAllowed(id, want) ? want : TARGETS[id].defaultMode;
-  const phone = ui === 'tg' && to.tg === 'desktop' ? 'desktop' : 390;
-  const fopts = { blank: mode === 'braille' && ui !== 'file' ? state.blank : 'u2800', caption: ui === 'tgc' && to.tgc === 'caption', phone };
-  return { ui, id, mode, phone, fopts };
+  // Steam is read on PCs; Telegram has its own Phone / Desktop switch
+  const phone = ui === 'steam' || ((id === 'tg' || id === 'tgc') && to.tgScreen === 'desktop') ? 'desktop' : 390;
+  const fopts = { blank: mode === 'braille' && ui !== 'file' ? state.blank : 'u2800', caption: !!(v && v.caption), phone };
+  return { ui, id, mode, phone, fopts, variant: v ? v.v : null };
 }
 const autoCols = r => (r.ui === 'file' ? FILE_COLS[r.mode] : autoFit(r.id, r.mode, r.fopts).cols);
 const colsOf = r => clamp(state.cols ?? autoCols(r), COLS_MIN, COLS_MAX);
@@ -255,6 +287,8 @@ function render() {
 
 // ------------------------------------------------------------------------------------ preview
 function previewSlots() {
+  // Steam has no light mode: one dark preview, on every screen
+  if (cur && cur.r.ui === 'steam') return [['pv0', 'dark']];
   if (sideBySide.matches && !cropping) return [['pv0', 'light'], ['pv1', 'dark']];
   return [['pv0', state.previewTheme]];
 }
@@ -269,7 +303,7 @@ function drawPreviews() {
   const r = cur.r;
   const slots = previewSlots();
   $('pv1').hidden = slots.length < 2;
-  $('btnPvTheme').hidden = slots.length > 1;
+  $('btnPvTheme').hidden = slots.length > 1 || r.ui === 'steam';
   // phones: Crop / Compare / theme / device sit in the preview's own header row (no extra row);
   // the header keeps its title in the middle, clear of the pills
   const phoneTools = !wide.matches;
@@ -289,7 +323,8 @@ function drawPreviews() {
     }
     // dark preview, art not inverted: say so on the preview itself, with the fix
     const banner = theme === 'dark' && !state.tone.invert && r.ui !== 'file'
-      ? { text: 'Shows as a negative in dark mode', action: 'Invert', onAction: () => setInvert(true) } : null;
+      ? { text: r.ui === 'steam' ? 'Steam is dark: this shows as a negative' : 'Shows as a negative in dark mode',
+          action: 'Invert', onAction: () => setInvert(true) } : null;
     cur.pv = renderPreview(el, { target: r.id, payload, grid, device: state.device, theme, phone: r.phone, opts: r.fopts, inset, banner });
     el.style.setProperty('--pv-k', k < 0.999 ? k.toFixed(4) : '1');
     $('stage').style.setProperty('--pv-k', k < 0.999 ? k.toFixed(4) : '1');
@@ -357,7 +392,7 @@ function updateFit() {
     html = `${cols} × ${rows} characters · ${nf(p.count)} in all · <b>Any size</b>`;
   } else {
     const where = r.phone === 'desktop' ? 'in the app' : 'on a phone';
-    const head = `${nf(p.count)} / ${nf(p.limit)}`;
+    const head = `${nf(p.count)} / ${nf(p.limit)}${p.unit === 'bytes' ? ' bytes' : ''}`;
     if (p.count > p.limit) {
       html = `${head} · ${cols} wide · <b>${nf(p.count - p.limit)} over</b>`;
       if (r.id === 'x') html += ' · <button type="button" class="text-btn" data-fix="premium">I have Premium</button>';
@@ -379,8 +414,9 @@ function updateFit() {
 /** Braille with clean blanks slants in Telegram Desktop and Windows browsers (SPEC device finding). */
 function slantsOnWindows(r) {
   if (r.mode !== 'braille' || r.fopts.blank !== 'u2800') return false;
-  // Telegram Desktop and Reddit are read on Windows desktops a lot, so they always get the note
-  if (!(r.ui === 'tg' || r.ui === 'tgc' || r.ui === 'reddit' || state.device === 'windows')) return false;
+  // Telegram Desktop, Reddit, Steam, YouTube and Twitch are read on Windows desktops a lot: they
+  // always get the note; elsewhere only the Windows preview does
+  if (!(isTg(r) || ['reddit', 'steamc', 'steamp', 'steamb', 'ytc', 'ytlive', 'twitch'].includes(r.id) || state.device === 'windows')) return false;
   // only when some row starts with blanks before its first dot (else nothing moves)
   const { cols, rows, cp } = grid;
   for (let y = 0; y < rows; y++) {
@@ -425,14 +461,13 @@ function showTip(text) {
 $('fitTip').querySelector('button').addEventListener('click', () => { $('fitTip').hidden = true; });
 
 // ------------------------------------------------------------------------------------ targets UI
+// the desktop cards: the place picked now and its budget; the welcome tiles: what the app covers
 function budgetText(ui) {
-  const to = state.targetOpts;
-  if (ui === 'ig') return '2,200 characters';
-  if (ui === 'x') return to.x === 'long' ? '25,000 (Premium)' : '280 characters';
-  if (ui === 'tg') return '4,096 characters';
-  if (ui === 'tgc') return to.tgc === 'caption' ? '1,024 (caption)' : '4,096 characters';
-  if (ui === 'reddit') return 'Post or comment';
-  return 'PNG, SVG, HTML, text';
+  if (ui === 'file') return 'PNG, SVG, HTML, text';
+  const v = variantOf(ui);
+  const id = v ? v.id : SINGLE[ui];
+  const n = limitFor(id, { caption: !!(v && v.caption) });
+  return `${v && VARIANTS[ui].length > 1 ? v.label + ' · ' : ''}${nf(n)}`;
 }
 
 function buildTargets() {
@@ -456,8 +491,8 @@ function buildTargets() {
     const tile = document.createElement('button');
     tile.type = 'button'; tile.className = 'wtile'; tile.setAttribute('role', 'radio'); tile.dataset.v = t.id;
     tile.innerHTML = '<b></b><span></span>';
-    tile.querySelector('b').textContent = t.id === 'file' ? 'Just a file' : t.tile;
-    tile.querySelector('span').textContent = budgetText(t.id);
+    tile.querySelector('b').textContent = t.tile;
+    tile.querySelector('span').textContent = t.sub;
     tiles.append(tile);
   }
   for (const host of [row, cards, tiles]) {
@@ -497,9 +532,7 @@ function syncTargetChecks() {
   }
   for (const el of document.querySelectorAll('#targetCards [data-v] span, #welcomeTargets [data-v] span')) {
     const v = el.parentElement.dataset.v;
-    // the welcome tile tells people with Premium that X is not stuck at 280
-    const welcomeX = v === 'x' && el.closest('#welcomeTargets') && state.targetOpts.x !== 'long';
-    el.textContent = welcomeX ? '280, or 25,000 with Premium' : budgetText(v);
+    el.textContent = el.closest('#welcomeTargets') ? UI_TARGETS.find(t => t.id === v).sub : budgetText(v);
   }
   revealChip();
 }
@@ -575,7 +608,9 @@ function setTarget(ui) {
 }
 
 // ------------------------------------------------------------------------------------ actions
-const PRIMARY = { ig: 'Copy for Instagram', x: 'Post on X', xlong: 'Copy for X', tg: 'Copy for Telegram', tgc: 'Copy for the channel', reddit: 'Copy for Reddit', plain: 'Download' };
+const PRIMARY = { ig: 'Copy for Instagram', x: 'Post on X', xlong: 'Copy for X', tg: 'Copy for Telegram', tgc: 'Copy for the channel',
+                  reddit: 'Copy for Reddit', steamc: 'Copy for Steam', steamp: 'Copy for your profile', steamb: 'Copy for your profile', ytc: 'Copy for YouTube',
+                  ytlive: 'Copy for live chat', twitch: 'Copy for Twitch', plain: 'Download' };
 const actionSets = [];
 let copiedUntil = 0;
 
@@ -697,7 +732,7 @@ function updateActions() {
     // (desktop, Dots past LINK_MAX) would only copy again: no button then either.
     let secLabel = '', show = true;
     if (m.fix) { setBtn(sec, null, 'Copy anyway'); secLabel = 'Copy anyway'; }
-    else if (r.ui === 'tg' || r.ui === 'tgc') {
+    else if (isTg(r)) {
       if (coarse) { setBtn(sec, 'share', 'Share'); secLabel = 'Share to Telegram'; sec.classList.add('narrow-icon'); }
       else if (tgLinkFits()) { setBtn(sec, 'share', 'Open'); secLabel = 'Open in Telegram'; }
       else show = false;
@@ -731,7 +766,7 @@ function onSecondary(e) {
   const m = actionModel();
   const ui = cur.r.ui;
   if (m.fix) return runCopy(e, 'copy');
-  if (ui === 'tg' || ui === 'tgc') return runCopy(e, 'share');
+  if (isTg(cur.r)) return runCopy(e, 'share');
   if (ui === 'x') return runCopy(e, 'copy');
 }
 
@@ -991,19 +1026,21 @@ function buildSize() {
   $('colsMinus').addEventListener('click', () => stepCols(-1));
   $('colsPlus').addEventListener('click', () => stepCols(1));
   $('autoBadge').addEventListener('click', () => { if (state.cols == null) return; state.cols = null; render(); commit('Width'); });
+  // Size tab: only Telegram's screen (the phone app or Telegram Desktop) lives here now
   segBind($('variantSeg'), v => {
+    if (state.targetOpts.tgScreen === v) return;
+    state.targetOpts.tgScreen = v;
+    state.cols = null;
+    render(); commit('Telegram screen');
+  });
+  // the place within the app sits right above the preview (X Free / Premium, Telegram chat /
+  // channel / caption, Steam comment / profile, YouTube comment / live chat)
+  segBind($('stripSeg'), v => {
     const ui = state.target;
-    if (!(ui in state.targetOpts)) return;
+    if (!VARIANTS[ui] || state.targetOpts[ui] === v) return;
     state.targetOpts[ui] = v;
     state.cols = null;
-    render(); commit('Target option');
-  });
-  // X Premium sits right above the preview: people with Premium should not have to find it in Size
-  segBind($('xPlanSeg'), v => {
-    if (state.targetOpts.x === v) return;
-    state.targetOpts.x = v;
-    state.cols = null;
-    render(); commit(v === 'long' ? 'X Premium' : 'X free');
+    render(); commit(`${UI_TARGETS.find(t => t.id === ui).tile}: ${variantOf(ui).label}`);
   });
   segBind($('blankSeg'), v => { state.blank = v; segSet($('blankSeg'), v); render(); commit('Blank cells'); });
 }
@@ -1017,6 +1054,23 @@ function stepCols(d) {
   render();
   commit('Width');
   announce(`${cur.cols} columns, ${cur.rows} rows. ${$('fitLine').textContent}`);
+}
+
+// the variant switch above the preview: rebuilt when the app changes, checked on every render
+let stripFor = '';
+function syncStrip() {
+  const ui = state.target, vs = VARIANTS[ui];
+  $('variantStrip').hidden = !vs;
+  if (!vs) return;
+  if (stripFor !== ui) {
+    stripFor = ui;
+    $('stripSeg').setAttribute('aria-label', `Where on ${UI_TARGETS.find(t => t.id === ui).tile}`);
+    $('stripSeg').innerHTML = vs.map(v => {
+      const n = limitFor(v.id, { caption: !!v.caption });
+      return `<button type="button" role="radio" data-v="${v.v}">${v.label}<small>${nf(n)} ${unitOf(v.id) === 'bytes' ? 'bytes' : 'characters'}</small></button>`;
+    }).join('');
+  }
+  segSet($('stripSeg'), variantOf(ui).v);
 }
 
 let variantFor = '';
@@ -1035,19 +1089,16 @@ function syncSize() {
   if (key !== variantFor) {
     variantFor = key;
     let label = '', opts = [];
-    if (ui === 'x') { label = 'Post'; opts = [['post', 'Post', '280'], ['long', 'Long post', 'Premium']]; }
-    if (ui === 'tg') {
+    if (isTg(r)) {
       label = 'Screen';
-      opts = [['phone', 'Phone', `${maxCols('tg', r.mode, { phone: 390 })} wide`], ['desktop', `Desktop (${maxCols('tg', r.mode, { phone: 'desktop' })})`, 'Telegram Desktop']];
+      opts = [['phone', 'Phone', `${maxCols(r.id, r.mode, { phone: 390 })} wide`], ['desktop', `Desktop (${maxCols(r.id, r.mode, { phone: 'desktop' })})`, 'Telegram Desktop']];
     }
-    if (ui === 'tgc') { label = 'Post type'; opts = [['post', 'Text post', '4,096'], ['caption', 'Photo caption', '1,024']]; }
     box.hidden = !opts.length;
     $('variantLabel').textContent = label;
     $('variantSeg').innerHTML = opts.map(([v, a, b]) => `<button type="button" role="radio" data-v="${v}">${a}<small>${b}</small></button>`).join('');
   }
-  if (ui in state.targetOpts) segSet($('variantSeg'), state.targetOpts[ui]);
-  $('xPlan').hidden = ui !== 'x';
-  segSet($('xPlanSeg'), state.targetOpts.x);
+  if (isTg(r)) segSet($('variantSeg'), state.targetOpts.tgScreen);
+  syncStrip();
   $('blankBox').hidden = !(r.mode === 'braille' && ui !== 'file');
   segSet($('blankSeg'), state.blank);
 }

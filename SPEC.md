@@ -117,12 +117,14 @@ identical in every browser. Edges must read as `/ \ | _ - ( )`.
 ```js
 // count.js
 export function utf16Length(s)
+export function utf8Length(s)           // Steam's limits are UTF-8 bytes
 export function xWeightedLength(s)      // twitter-text v3 rules, tested reimplementation (below)
 export function xInvalidChars(s) -> string[]   // U+FFFE, U+FEFF, U+FFFF make a post invalid
 export function findUrlsX(s) -> [{start, end}] // what X would auto-link (needs a valid TLD)
 
 // targets.js
-export const TARGETS = { ig, x, xlong, tg, tgc, plain }   // id, name, limit, counter, modes, …
+export const TARGETS = { ig, x, xlong, tg, tgc, reddit, ytc, steamc, steamp, steamb, ytlive, twitch, plain }
+                     // id, name, limit, counter ('utf16' | 'x' | 'utf8'), modes, indent, flow, …
 export const FIT     // per target + mode: fontPx, cellEm, lineEm, bubble widths at phone 360/390/430
                      // and desktop; `calibrated: false` until the device tests fill it in
 export function cellAspect(target, mode) -> number
@@ -130,6 +132,9 @@ export function rowsFor(cols, aspect) -> number
 export function maxCols(target, mode, { phone = 390 } = {}) -> number
 export function countFor(target, mode, cols, rows, opts) -> number   // analytic, equals formatFor().count
 export function autoFit(target, mode, opts) -> { cols, rows }         // largest grid that fits both
+export function unitOf(target) -> 'utf16' | 'weighted' | 'bytes'
+export function chatWidth(target, mode, phone) -> px                  // flow targets: the chat column
+export function flowRange(target, mode, cols) -> { min, max }         // chat widths that stack the rows
 export function formatFor(target, grid, opts = {}) -> {
   text, html,            // html: '<pre>…</pre>' for Telegram ASCII (desktop clipboard), else null
   count, limit, fits, over, cols, rows, maxCols, wraps, foldRow,
@@ -144,6 +149,11 @@ Targets:
   timeline folds after about 280 (report `foldRow`, the first row past the fold).
 - `tg` Telegram message: 4,096 UTF-16 units; Braille plain (default) or ASCII in a ``` fence.
 - `tgc` Telegram channel post: 4,096; `caption: true` = media caption 1,024.
+- `reddit` Reddit post or comment: see the Reddit section.
+- `ytc` YouTube comment: 10,000 UTF-16 units; Braille rows like Instagram.
+- `steamc` Steam comment 1,000, `steamp` profile summary 4,000, `steamb` Custom Info Box 8,000:
+  UTF-8 bytes; Braille rows. See the Steam, YouTube and Twitch section.
+- `ytlive` YouTube live chat 200, `twitch` Twitch chat 500: UTF-16 units; one line (`flow`).
 - `plain`: no limit, any mode (downloads, blocks).
 
 Rules (every one needs a unit test):
@@ -345,3 +355,32 @@ payload also has `html` = `<pre><code>` of the unindented rows, written to the c
 device: the rich-text editor reads the HTML and makes a code block, Markdown mode and the apps read
 the plain text (tests/reddit-paste.e2e.mjs pastes both ways). A one-time tip says to press Code
 block if Reddit still shows plain lines. The preview is a generic comment with a grey code block.
+
+### Steam, YouTube and Twitch targets (2026-09-24)
+The UI is apps + variants: eight app chips (Instagram, X, Telegram, Reddit, Steam, YouTube, Twitch,
+File) and, for apps with more than one place, a strip above the preview (X: Free / Premium;
+Telegram: Chat / Channel / Caption; Steam: Comment / Summary / Info box; YouTube: Comment / Live
+chat). `?for=` takes an app or a target id (`?for=steamb` opens Steam on Info box).
+- Steam (`steamc` 1,000, `steamp` 4,000, `steamb` 8,000) counts UTF-8 bytes (`counter: 'utf8'`):
+  a Braille cell is 3 bytes, a line break 1; `countFor` = 3 x cells + rows - 1. Steam has no code
+  block and collapses spaces, so Dots only. Read on PCs: the preview is a desktop-width dark page
+  (one preview, no light mode; the invert banner says Steam is dark), and the art auto-fits the
+  desktop widths (FIT desktop 48 / 48 / 60). Warning `steam-bytes`: text past the limit is cut
+  off when saved.
+- YouTube comment (`ytc`): 10,000 UTF-16 units, Braille rows; warning `yt-review` (ASCII-art spam
+  screening, "Read more" fold).
+- Single-line chats (`flow: true`: `ytlive` 200, `twitch` 500): Enter sends, so no line breaks. The
+  payload is one line: a blank lead-in row (so a username cannot pull row 1 onto its line), then
+  every row as an unbroken Braille word, joined by single U+0020. `countFor` = (rows + 1) x cols +
+  rows. The chat's word wrap stacks the rows iff a row fits and two rows plus a space do not:
+  `flowRange` = [row width, 2 x row width + space] in px (FIT spaceEm 0.27); warnings `flow-width`
+  (the range) and `flow-narrow` (the desktop chat, FIT chatDesktop 320 / 330 px, is outside it).
+  Twitch 30 x 15 = 495 characters, YouTube live 17 x 10 = 197. Warnings `twitch-duplicate` (same
+  message within 30 s), `yt-hold` (held for review).
+- Preview families: `yt` (comment with avatar, @you, thumbs, Reply), `steam` (dark card: a comment
+  with a square avatar, or a Summary / Custom Info Box label), `chat` (three chat lines, then
+  `you` and the art laid out by `layoutFlow`, which reproduces the chat's greedy word wrap after
+  the username; lines holding two rows get a red band; a caption names the widths that line up).
+  On the Windows device the chat is the desktop column and the narrower Windows blanks count.
+- The Windows slant note (fit line, "Windows-safe blanks") shows for Steam, YouTube and Twitch on
+  every device, as for Telegram and Reddit: most of their readers are on PCs.

@@ -15,10 +15,10 @@ await page.goto('http://localhost:8860/?for=x');
 await page.waitForFunction(() => window.TY && window.__done);
 const tiles = await page.$$eval('.wtile', ts => ts.map(t => t.textContent.trim()));
 await page.evaluate(() => window.TY.openSample('landmark'));
-await page.waitForFunction(() => window.TY.grid && !document.getElementById('xPlan').hidden, null, { timeout: 15000 });
+await page.waitForFunction(() => window.TY.grid && !document.getElementById('variantStrip').hidden, null, { timeout: 15000 });
 const read = () => page.evaluate(() => ({
-  shown: !document.getElementById('xPlan').hidden,
-  sel: document.querySelector('#xPlanSeg [aria-checked="true"]')?.dataset.v,
+  shown: !document.getElementById('variantStrip').hidden,
+  sel: document.querySelector('#stripSeg [aria-checked="true"]')?.dataset.v,
   fit: document.getElementById('fitLine').textContent,
   target: window.TY.payload.target, grid: `${window.TY.grid.cols}x${window.TY.grid.rows}`,
   count: window.TY.payload.count, limit: window.TY.payload.limit,
@@ -26,7 +26,7 @@ const read = () => page.evaluate(() => ({
 }));
 const free = await read();
 await page.screenshot({ path: `shots/xplan_${name}_free.png` });
-await page.click('#xPlanSeg [data-v="long"]');
+await page.click('#stripSeg [data-v="long"]');
 await page.waitForTimeout(250);
 const prem = await read();
 await page.screenshot({ path: `shots/xplan_${name}_premium.png` });

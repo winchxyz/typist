@@ -12,6 +12,16 @@ export const X_URL = 23;
 /** Instagram / Telegram length: UTF-16 code units, exactly what String#length gives. */
 export const utf16Length = s => s.length;
 
+/** Steam counts its limits in UTF-8 bytes: a Braille character takes 3, a line break 1. */
+export function utf8Length(s) {
+  let n = 0;
+  for (const ch of s) {
+    const c = ch.codePointAt(0);
+    n += c < 0x80 ? 1 : c < 0x800 ? 2 : c < 0x10000 ? 3 : 4;
+  }
+  return n;
+}
+
 const LIGHT = [[0x0000, 0x10ff], [0x2000, 0x200d], [0x2010, 0x201f], [0x2032, 0x2037]];
 const lightWeight = c => {
   for (const [a, b] of LIGHT) if (c >= a && c <= b) return true;

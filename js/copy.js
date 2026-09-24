@@ -185,6 +185,13 @@ export function copiedHint(target, payload = {}) {
     // Reddit's rich-text editor turns every line into its own paragraph: Markdown mode keeps the
     // 4-space code block that holds the art together
     case 'reddit': return 'Copied as a code block. Paste it into your post or comment.';
+    case 'ytc': return 'Copied. Paste it into a comment.';
+    case 'steamc': return 'Copied. Paste it into a comment on a profile, group or screenshot.';
+    case 'steamp': return 'Copied. Paste it into Edit Profile › Summary, then Save.';
+    case 'steamb': return 'Copied. Paste it into your Custom Info Box showcase, then Save.';
+    // a chat message is one line: the chat's own wrap stacks the rows, so send it untouched
+    case 'ytlive': return 'Copied. Paste it into the chat and send it as it is.';
+    case 'twitch': return 'Copied. Paste it into the chat and send it as it is.';
     default: return 'Copied as plain text.';
   }
 }
